@@ -326,5 +326,15 @@ button.cal-day.all { background: rgba(48, 209, 88, 0.12); border-color: rgba(48,
 .cal-day .dots i { width: 6px; height: 6px; }
 .cal-sum { margin: 12px 4px 0; font-size: 13px; color: var(--muted); text-align: center; }
 .cal-sum.all { color: var(--ok); }
-.lib-back { display: block; margin: 0 0 -4px -2px; padding: 6px 2px; font-size: 17px; }
-.lib-back + .lib-header { margin-top: 0; }
+/* Botón Atrás: píldora visible con flecha y el nombre del nivel anterior */
+.back-btn {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%;
+  height: 40px; padding: 0 16px 0 10px; border-radius: 999px;
+  background: rgba(255, 197, 61, 0.14); border: 1px solid rgba(255, 197, 61, 0.35);
+  color: var(--accent); font-size: 16px; font-weight: 650;
+}
+.back-btn span:last-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.back-btn:active { background: rgba(255, 197, 61, 0.25); }
+.back-ic svg { width: 20px; height: 20px; }
+.lib-back { margin: 4px 0 2px; }
+.lib-back + .lib-header { margin-top: 6px; }

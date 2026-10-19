@@ -13,15 +13,15 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icons/icon-180.png">
   <link rel="icon" type="image/png" href="icons/icon-192.png">
-  <link rel="stylesheet" href="css/app.css?v=1.9">
-  <script type="module" src="js/app.js?v=1.9"></script>
+  <link rel="stylesheet" href="css/app.css?v=2.0">
+  <script type="module" src="js/app.js?v=2.0"></script>
 </head>
 <body>
 
   <!-- Biblioteca -->
   <section id="view-library" class="view">
     <div class="wrap">
-      <button id="lib-back" class="text-btn lib-back" hidden></button>
+      <button id="lib-back" class="back-btn lib-back" hidden></button>
       <header class="lib-header">
         <h1 id="lib-title">Guion</h1>
         <button id="btn-import" class="icon-btn" aria-label="Importar archivo de texto"></button>
@@ -38,7 +38,7 @@
   <!-- Editor -->
   <section id="view-editor" class="view">
     <header class="bar">
-      <button id="ed-back" class="text-btn">‹ Guiones</button>
+      <button id="ed-back" class="back-btn" aria-label="Volver">Volver</button>
       <div class="bar-right">
         <button id="ed-status" class="status-pill">Pendiente</button>
         <button id="ed-more" class="icon-btn" aria-label="Más opciones"></button>

@@ -1,10 +1,10 @@
 // El ?v= de cada import hace que una versión nunca se mezcle con archivos viejos en caché.
-import { loadScripts, saveScripts, loadSettings, saveSettings, defaultSettings, LAYOUT_KEYS, uid } from './store.js?v=1.9';
-import { norm } from './matcher.js?v=1.9';
-import { VoiceFollower, voiceSupported, voiceLog } from './voice.js?v=1.9';
-import { openCamera, Recorder, pickMime } from './camera.js?v=1.9';
+import { loadScripts, saveScripts, loadSettings, saveSettings, defaultSettings, LAYOUT_KEYS, uid } from './store.js?v=2.0';
+import { norm } from './matcher.js?v=2.0';
+import { VoiceFollower, voiceSupported, voiceLog } from './voice.js?v=2.0';
+import { openCamera, Recorder, pickMime } from './camera.js?v=2.0';
 
-const VERSION = '1.9';
+const VERSION = '2.0';
 
 // ---------- Utilidades ----------
 const $ = (s, root = document) => root.querySelector(s);
@@ -32,6 +32,7 @@ const ICONS = {
   more: svg('<circle cx="5" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="19" cy="12" r="1.6" fill="currentColor"/>', 'stroke="none"'),
   import: svg('<path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 20h14"/>'),
   chevron: svg('<path d="M9.5 6l6 6-6 6"/>'),
+  back: svg('<path d="M14.5 6l-6 6 6 6"/>', 'stroke-width="2.6"'),
 };
 
 const fold = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -268,7 +269,7 @@ function renderBack() {
     parts.forEach((_, i) => trail.push([crumbLabel(parts.slice(0, i + 1)), `${nicheBase(niche)}/${parts.slice(0, i + 1).join('/')}`]));
   }
   const [label, path] = trail[trail.length - 2];
-  btn.textContent = '‹ ' + label;
+  btn.replaceChildren(h('span', { class: 'back-ic', html: ICONS.back }), h('span', {}, label));
   btn.onclick = () => { $('#search').value = ''; go(path); };
 }
 
@@ -428,7 +429,7 @@ async function importExcel(file) {
   toast('Leyendo el Excel…', 15000);
   let rows;
   try {
-    const { readWorkbook, scriptsFromWorkbook } = await import('./xlsx.js?v=1.9');
+    const { readWorkbook, scriptsFromWorkbook } = await import('./xlsx.js?v=2.0');
     rows = scriptsFromWorkbook(await readWorkbook(file));
   } catch (e) {
     toast('No pude leer el Excel: ' + e.message, 6000);
@@ -647,7 +648,7 @@ function tick(t) {
       // Solo se mueve hacia palabras reconocidas del guion (nada de adelantarse por tiempo).
       const d = P.targetY - P.y;
       if (Math.abs(d) > 0.5) {
-        P.y += d * (1 - Math.exp(-dt * 9));
+        P.y += d * (1 - Math.exp(-dt * 16));
         sc.scrollTop = P.y;
       }
     }
@@ -1111,6 +1112,7 @@ function bind() {
 
   // Editor
   for (const id of ['#ed-title', '#ed-cat', '#ed-text']) $(id).addEventListener('input', edInput);
+  $('#ed-back').replaceChildren(h('span', { class: 'back-ic', html: ICONS.back }), h('span', {}, 'Volver'));
   $('#ed-back').addEventListener('click', () => go(homeOf(getScript(editId))));
   $('#ed-status').addEventListener('click', () => { const s = getScript(editId); if (s) { setDone(s, !s.done); edStatus(); } });
   $('#ed-more').addEventListener('click', () => scriptMenu(editId, true));
