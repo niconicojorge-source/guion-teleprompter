@@ -1,10 +1,11 @@
 // El ?v= de cada import hace que una versión nunca se mezcle con archivos viejos en caché.
-import { loadScripts, saveScripts, loadSettings, saveSettings, defaultSettings, LAYOUT_KEYS, uid } from './store.js?v=2.1';
-import { norm } from './matcher.js?v=2.1';
-import { VoiceFollower, voiceSupported, voiceLog, logVoice } from './voice.js?v=2.1';
-import { openCamera, openMic, Recorder, pickMime } from './camera.js?v=2.1';
+import { loadScripts, saveScripts, loadSettings, saveSettings, defaultSettings, LAYOUT_KEYS, uid } from './store.js?v=2.2';
+import { norm } from './matcher.js?v=2.2';
+import { VoiceFollower, voiceSupported, voiceLog, logVoice } from './voice.js?v=2.2';
+import { openCamera, Recorder, pickMime } from './camera.js?v=2.2';
+import { AudioBridge } from './audio.js?v=2.2';
 
-const VERSION = '2.1';
+const VERSION = '2.2';
 
 // ---------- Utilidades ----------
 const $ = (s, root = document) => root.querySelector(s);
@@ -429,7 +430,7 @@ async function importExcel(file) {
   toast('Leyendo el Excel…', 15000);
   let rows;
   try {
-    const { readWorkbook, scriptsFromWorkbook } = await import('./xlsx.js?v=2.1');
+    const { readWorkbook, scriptsFromWorkbook } = await import('./xlsx.js?v=2.2');
     rows = scriptsFromWorkbook(await readWorkbook(file));
   } catch (e) {
     toast('No pude leer el Excel: ' + e.message, 6000);
@@ -569,6 +570,7 @@ function closePrompter() {
   cancelCountdown();
   stopPrompting();
   if (P.recording) { P.recording = false; clearInterval(P.recTimer); P.recorder?.stop(); }
+  P.bridge?.stop();
   stopCamera();
   cancelAnimationFrame(P.raf);
   try { P.wake?.release(); } catch { /* nada */ }
@@ -844,23 +846,14 @@ function watchAudio(track) {
   track.onunmute = () => logVoice('mic', 'activo de nuevo');
 }
 
-// Micrófono nuevo para cada toma. Si no se puede, se sigue con el anterior si sigue vivo.
-async function freshMic() {
-  if (!P.stream) return false;
-  const old = P.stream.getAudioTracks()[0];
-  try {
-    const track = await openMic();
-    if (old) { P.stream.removeTrack(old); old.stop(); }
-    P.stream.addTrack(track);
-    watchAudio(track);
-    P.hasAudio = true;
-    logVoice('mic', `nuevo para la toma (${audioState(track)})`);
-    return true;
-  } catch (e) {
-    logVoice('mic', `no se pudo reabrir: ${e.name}`);
-    P.hasAudio = !!old && old.readyState === 'live';
-    return P.hasAudio;
-  }
+// El iPhone le está sacando el micrófono a la grabación una y otra vez (pelea con el
+// reconocimiento de voz): se pausa la voz en esta toma para no perder el audio.
+function voiceYield() {
+  if (P.voiceYielded || !P.recording) return;
+  P.voiceYielded = true;
+  logVoice('mic', 'el reconocimiento le saca el micrófono a la toma: voz en pausa');
+  stopVoice();
+  toast('El iPhone le estaba sacando el micrófono a la grabación: pausé el seguimiento por voz en esta toma para no perder el audio. Podés mover el texto con el dedo.', 8000);
 }
 
 async function onRecord() {
@@ -868,16 +861,16 @@ async function onRecord() {
   if (P.counting) { cancelCountdown(); stopPrompting(); return; }
   if (P.preparing) return;
   if (!settings.camera) { toast('Activá la cámara en Ajustes para grabar.'); return; }
+  // El audio de la toma se arma con Web Audio, que iOS solo deja arrancar dentro del toque.
+  P.bridge ||= new AudioBridge({ log: logVoice, onFight: voiceYield });
+  P.bridge.unlock();
   P.preparing = true;
   try {
     if (cameraLost()) {
       stopCamera();
       if (!(await startCamera())) return;
     }
-    // Orden importante en iPhone: primero el micrófono de la toma, después el reconocimiento
-    // de voz (que queda en pausa hasta que termine la cuenta regresiva).
-    P.voice?.stop();
-    if (!(await freshMic())) toast('No pude abrir el micrófono: esta toma se va a grabar sin sonido.', 5000);
+    if (!(await P.bridge.prepare(P.stream.getAudioTracks()[0]))) toast('No pude abrir el micrófono: esta toma se va a grabar sin sonido.', 5000);
     if (P.mode === 'voice') { startVoice(); P.voice && (P.voice.paused = true); }
     startCountdown(Number(settings.countdown) || 0, beginRecording);
   } finally {
@@ -908,11 +901,12 @@ function cancelCountdown() {
 
 function beginRecording() {
   try {
-    // Se arma el stream de la toma con las pistas actuales (video + micrófono recién abierto).
-    const tracks = [...P.stream.getVideoTracks(), ...P.stream.getAudioTracks().filter((t) => t.readyState === 'live')];
-    logVoice('rec', `inicio · audio: ${audioState(P.stream.getAudioTracks()[0])}`);
-    P.recorder = new Recorder(new MediaStream(tracks));
+    // Video de la cámara + la salida fija del puente de audio (nunca se corta).
+    logVoice('rec', `inicio · micrófono: ${audioState(P.bridge.track)}`);
+    P.recorder = new Recorder(new MediaStream([...P.stream.getVideoTracks(), P.bridge.output]));
     P.recorder.start();
+    P.voiceYielded = false;
+    P.bridge.start();
   } catch (e) {
     toast('No pude iniciar la grabación: ' + e.message, 6000);
     stopPrompting();
@@ -939,16 +933,18 @@ async function stopRecording() {
   clearInterval(P.recTimer);
   $('#rec-time').hidden = true;
   const duration = (performance.now() - P.recStart) / 1000;
-  logVoice('rec', `fin · audio: ${audioState(P.stream?.getAudioTracks()[0])}`);
+  P.bridge.stop();
+  const silent = P.bridge.silentRatio();
+  logVoice('rec', `fin · micrófono: ${audioState(P.bridge.track)} · silencio del sistema: ${Math.round(silent * 100)}%`);
   if (P.voice) P.voice.gentle = false;
   stopPrompting();
   const blob = await P.recorder.stop();
   P.recorder = null;
   if (!blob.size) { toast('La grabación quedó vacía. Probá de nuevo.'); return; }
-  showTake(blob, duration);
+  showTake(blob, duration, silent);
 }
 
-function showTake(blob, duration) {
+function showTake(blob, duration, silent = 0) {
   const s = getScript(P.id);
   const ext = /mp4/.test(blob.type) ? 'mp4' : 'webm';
   const name = `${slug(s?.title || 'toma')}-${stamp()}.${ext}`;
@@ -968,12 +964,14 @@ function showTake(blob, duration) {
         onloadedmetadata: (e) => {
           const at = e.currentTarget.audioTracks;
           if (at && at.length === 0) {
-            logVoice('rec', 'la toma quedó SIN audio');
+            logVoice('rec', 'la toma quedó SIN pista de audio');
             e.currentTarget.after(h('p', { class: 'warn' }, '⚠︎ Esta toma quedó sin sonido. Volvé a grabarla; si se repite, copiame el registro de voz desde Ajustes.'));
           }
         },
       }),
       h('p', { class: 'info' }, `${fmtClock(duration)} · ${(blob.size / 1048576).toFixed(1)} MB · ${ext.toUpperCase()}`),
+      silent > 0.5 ? h('p', { class: 'warn' }, '⚠︎ El iPhone silenció el micrófono durante casi toda la toma. Volvé a grabarla; si se repite, copiame el registro de voz desde Ajustes.')
+        : silent > 0.08 ? h('p', { class: 'warn' }, `⚠︎ La toma tuvo cortes de sonido (~${Math.round(silent * duration)} s). Escuchala antes de guardarla.`) : null,
       h('div', { class: 'sheet-actions' },
         h('button', { class: 'btn primary', onclick: () => { saved = true; shareOrDownload(blob, name, s?.title); } },
           canShare ? 'Guardar en Fotos / Compartir' : 'Descargar video'),
