@@ -1,4 +1,4 @@
-import { openMic } from './camera.js?v=2.5';
+import { openMic } from './camera.js?v=2.6';
 
 // Audio de la toma. En iPhone, cuando algo vuelve a abrir el micrófono (por ejemplo el
 // reconocimiento de voz de Siri), el uso anterior queda silenciado o se corta. Por eso la
@@ -20,6 +20,7 @@ export class AudioBridge {
     this.reopening = false;
     this.reopens = [];
     this.stats = { checks: 0, silent: 0 };
+    this.owned = null; // micrófono que abrió el puente (el de la cámara lo maneja la cámara)
   }
 
   // Tiene que llamarse dentro del toque del usuario: iOS solo deja arrancar el audio así.
@@ -40,6 +41,7 @@ export class AudioBridge {
 
   plug(track) {
     try { this.src?.disconnect(); } catch { /* ya estaba desconectado */ }
+    if (this.owned && this.owned !== track) { this.owned.stop(); this.owned = null; }
     this.track = track;
     this.src = this.ctx.createMediaStreamSource(new MediaStream([track]));
     this.src.connect(this.dest);
@@ -60,6 +62,7 @@ export class AudioBridge {
     this.reopening = true;
     try {
       const t = await openMic();
+      this.owned = t;
       t.onended = () => this.log('mic', 'la pista de audio se cortó');
       t.onmute = () => this.log('mic', 'silenciado por el sistema');
       this.plug(t);
@@ -89,6 +92,18 @@ export class AudioBridge {
   }
 
   stop() { clearInterval(this.timer); }
+
+  // Fin de la toma o salida del teleprompter: suelta el micrófono propio y duerme el audio
+  // (si no, el iPhone sigue mostrando el micrófono en uso y gasta batería).
+  release() {
+    clearInterval(this.timer);
+    try { this.src?.disconnect(); } catch { /* nada */ }
+    this.src = null;
+    this.owned?.stop();
+    this.owned = null;
+    this.track = null;
+    if (this.ctx?.state === 'running') this.ctx.suspend().catch(() => {});
+  }
 
   check() {
     if (this.ctx.state !== 'running') this.ctx.resume().catch(() => {});

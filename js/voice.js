@@ -1,4 +1,4 @@
-import { tokenize, locate, follow } from './matcher.js?v=2.5';
+import { tokenize, locate, follow } from './matcher.js?v=2.6';
 
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 export const voiceSupported = !!SR;
@@ -112,7 +112,7 @@ export class VoiceFollower {
     r.interimResults = true;
     r.maxAlternatives = 1;
     const alive = () => { if (id === this.session) this.lastEventAt = performance.now(); };
-    r.onstart = alive;
+    r.onstart = () => { alive(); this.failStreak = 0; };
     r.onaudiostart = alive;
     r.onspeechstart = alive;
     r.onresult = (e) => {
@@ -134,7 +134,9 @@ export class VoiceFollower {
       if (id !== this.session || !this.active) return;
       // Fin normal (pausa): reiniciar ya mismo para no perder las primeras palabras.
       // Solo esperamos más si se repiten errores, para no entrar en un bucle.
-      const delay = this.errorStreak > 2 ? 1000 : 30;
+      // Muchos errores seguidos (sin red, micrófono ocupado): se deja de intentar y se avisa.
+      if (this.errorStreak > 8) { note('end', 'demasiados errores: me rindo'); this.active = false; this.rec = null; this.onError?.('giveup'); return; }
+      const delay = this.errorStreak > 2 ? Math.min(4000, 500 * this.errorStreak) : 30;
       note('end', `reinicio en ${delay}ms`);
       this.rec = null;
       this.timer = setTimeout(() => this.spawn(), delay);
@@ -154,7 +156,9 @@ export class VoiceFollower {
     } catch (err) {
       note('start-fail', err.name);
       this.rec = null;
-      this.timer = setTimeout(() => this.spawn(), 300);
+      this.failStreak = (this.failStreak || 0) + 1;
+      if (this.failStreak > 8) { this.active = false; this.onError?.('giveup'); return; }
+      this.timer = setTimeout(() => this.spawn(), 300 * this.failStreak);
     }
   }
 

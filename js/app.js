@@ -1,11 +1,11 @@
 // El ?v= de cada import hace que una versión nunca se mezcle con archivos viejos en caché.
-import { loadScripts, saveScripts, loadSettings, saveSettings, loadNiches, saveNiches, defaultSettings, LAYOUT_KEYS, uid } from './store.js?v=2.5';
-import { norm } from './matcher.js?v=2.5';
-import { VoiceFollower, voiceSupported, voiceLog, logVoice } from './voice.js?v=2.5';
-import { openCamera, Recorder, pickMime } from './camera.js?v=2.5';
-import { AudioBridge } from './audio.js?v=2.5';
+import { loadScripts, saveScripts, loadSettings, saveSettings, loadNiches, saveNiches, defaultSettings, LAYOUT_KEYS, uid } from './store.js?v=2.6';
+import { norm } from './matcher.js?v=2.6';
+import { VoiceFollower, voiceSupported, voiceLog, logVoice } from './voice.js?v=2.6';
+import { openCamera, Recorder, pickMime } from './camera.js?v=2.6';
+import { AudioBridge } from './audio.js?v=2.6';
 
-const VERSION = '2.5';
+const VERSION = '2.6';
 
 // ---------- Utilidades ----------
 const $ = (s, root = document) => root.querySelector(s);
@@ -107,17 +107,28 @@ let scripts = loadScripts();
 let settings = loadSettings();
 let currentView = null;
 
-const persist = () => saveScripts(scripts);
+// Si el teléfono se queda sin espacio, avisarlo siempre: si no, los cambios se pierden al cerrar.
+let fullWarnAt = 0;
+const persist = () => {
+  const ok = saveScripts(scripts);
+  if (!ok && Date.now() - fullWarnAt > 8000) {
+    fullWarnAt = Date.now();
+    toast('⚠︎ No pude guardar: este dispositivo se quedó sin espacio. Lo último que cambiaste puede perderse.', 7000);
+  }
+  return ok;
+};
 const getScript = (id) => scripts.find((s) => s.id === id);
 const categories = () => [...new Set(scripts.map((s) => (s.category || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
 
 function shareOrDownload(blob, name, title) {
   const file = new File([blob], name, { type: blob.type.split(';')[0] });
   if (navigator.canShare?.({ files: [file] })) {
-    return navigator.share({ files: [file], title }).catch((e) => { if (e.name !== 'AbortError') download(blob, name); });
+    // true = se guardó o compartió; false = el usuario canceló.
+    return navigator.share({ files: [file], title }).then(() => true)
+      .catch((e) => { if (e.name === 'AbortError') return false; download(blob, name); return true; });
   }
   download(blob, name);
-  return Promise.resolve();
+  return Promise.resolve(true);
 }
 
 function download(blob, name) {
@@ -126,7 +137,7 @@ function download(blob, name) {
   document.body.append(a);
   a.click();
   a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  setTimeout(() => URL.revokeObjectURL(url), 120000); // un video grande tarda en escribirse
 }
 
 // ---------- Navegación ----------
@@ -146,7 +157,11 @@ function route() {
   }
   if (view === 'edit' && getScript(id)) return showEditor(id);
   if (view === 'read' && getScript(id)) return showPrompter(id);
-  if (view === 'n') return showLibrary({ niche: decodeURIComponent(rest[0] || '_'), parts: rest.slice(1).filter(Boolean) });
+  if (view === 'n') {
+    let niche = '_';
+    try { niche = decodeURIComponent(rest[0] || '_'); } catch { /* enlace roto: inicio */ return go('/'); }
+    return showLibrary({ niche, parts: rest.slice(1).filter(Boolean) });
+  }
   if (view === 'o') return showLibrary({ other: true });
   showLibrary();
 }
@@ -154,7 +169,8 @@ function route() {
 function setView(name) {
   if (currentView === 'editor' && name !== 'editor') leaveEditor();
   if (currentView === 'prompter' && name !== 'prompter') closePrompter();
-  while (openSheets.length) openSheets[openSheets.length - 1]();
+  // La hoja de "Tu toma" no se cierra sola al navegar: se perdería el video.
+  for (const close of [...openSheets].reverse()) if (close.dismissable !== false) close();
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('active', v.id === 'view-' + name));
   currentView = name;
 }
@@ -177,9 +193,13 @@ function syncNiches() {
   let changed = false;
   for (const s of scripts) {
     const c = (s.category || '').trim();
-    if (s.date && c && !names.has(c)) { niches.push({ name: c, perDay: 3 }); names.add(c); changed = true; }
+    if (!c || names.has(c)) continue;
+    // "courier" escrito a mano va al nicho "Courier" en vez de crear otro.
+    const same = niches.find((n) => fold(n.name) === fold(c));
+    if (same) { s.category = same.name; changed = true; continue; }
+    if (s.date) { niches.push({ name: c, perDay: 3 }); names.add(c); changed = true; }
   }
-  if (changed) saveNiches(niches);
+  if (changed) { saveNiches(niches); persist(); }
 }
 const nicheOf = (key) => niches.find((n) => n.name === key);
 const perDay = (key) => nicheOf(key)?.perDay || 3;
@@ -458,14 +478,7 @@ async function setLayout(key, layout) {
     if (undated.length) {
       const ok = await confirmSheet(`${undated.length} guiones no tienen fecha. Los acomodo en el calendario desde hoy, ${perDay(key)} por día, en el orden de la lista.`, 'Acomodar');
       if (!ok) return;
-      const used = groupBy(list.filter((s) => s.date), (s) => s.date);
-      let iso = todayISO();
-      for (const s of undated) {
-        while ((used.get(iso)?.length || 0) >= perDay(key)) iso = nextDay(iso);
-        s.date = iso;
-        if (!used.has(iso)) used.set(iso, []);
-        used.get(iso).push(s);
-      }
+      spreadUndated(key, todayISO());
     }
   } else {
     listOf(key).forEach((s, i) => { s.order = i; });
@@ -475,6 +488,24 @@ async function setLayout(key, layout) {
   saveNiches(niches);
   go(nicheBase(key));
   renderLibrary();
+}
+
+// Guiones sin fecha de un nicho: al calendario desde `start`, N por día, en el orden de la lista.
+function spreadUndated(key, start) {
+  const list = listOf(key);
+  const used = groupBy(list.filter((s) => s.date), (s) => s.date);
+  let iso = start;
+  for (const s of list.filter((x) => !x.date)) {
+    while ((used.get(iso)?.length || 0) >= perDay(key)) iso = nextDay(iso);
+    s.date = iso;
+    if (!used.has(iso)) used.set(iso, []);
+    used.get(iso).push(s);
+  }
+}
+
+// "Nicho|código" -> "Nuevo nicho|código" (así una nueva importación lo sigue reconociendo).
+function rekey(xkey, from, to) {
+  return xkey && from && xkey.startsWith(from + '|') ? to + xkey.slice(from.length) : xkey;
 }
 
 function nextDay(iso) {
@@ -508,7 +539,11 @@ function nicheMenu(key) {
         const name = await promptSheet({ title: 'Renombrar nicho', value: key, ok: 'Guardar' });
         if (!name || name === key) return;
         if (nicheExists(name, key) || name === '_') { toast('Ya existe un nicho con ese nombre.'); return; }
-        for (const s of scripts) if ((s.category || '').trim() === key) s.category = name;
+        for (const s of scripts) {
+          if ((s.category || '').trim() !== key) continue;
+          s.category = name;
+          s.xkey = rekey(s.xkey, key, name);
+        }
         n.name = name;
         persist();
         saveNiches(niches);
@@ -639,7 +674,7 @@ function pickExcel(target) {
 // Acepta cualquier archivo y se fija qué es por su contenido, no solo por el nombre:
 // Excel (.xlsx), CSV, Word (.docx) o texto. Lo que no se puede leer explica cómo exportarlo.
 async function importFiles(files, target = null) {
-  const xlsx = () => import('./xlsx.js?v=2.5');
+  const xlsx = () => import('./xlsx.js?v=2.6');
   let texts = 0;
   const addText = (name, text) => {
     const now = Date.now();
@@ -648,6 +683,7 @@ async function importFiles(files, target = null) {
     texts++;
   };
   for (const f of files) {
+    if (f.size > 40 * 1024 * 1024) { toast(`"${f.name}" es demasiado grande (más de 40 MB).`, 6000); continue; }
     try {
       const head = new Uint8Array(await f.slice(0, 8).arrayBuffer());
       const sig = String.fromCharCode(...head.slice(0, 4));
@@ -690,7 +726,7 @@ const keyOfScript = (s) => s.xkey || excelKey(s.category, s.code, s.date, s.time
 // Claves de una importación. Si al importar varias hojas a un mismo nicho se repite un
 // código (A001 en dos hojas), la clave incluye la hoja para que no se pisen.
 function importPlan(rows, target) {
-  const lineOf = (r) => target || r.line;
+  const lineOf = (r) => target || niches.find((n) => fold(n.name) === fold(r.line))?.name || r.line;
   const base = (r) => excelKey(lineOf(r), r.code, r.date, r.time, r.title);
   const counts = new Map();
   for (const r of rows) counts.set(base(r), (counts.get(base(r)) || 0) + 1);
@@ -713,7 +749,7 @@ async function importExcel(file, target, loadSheets) {
   let rows;
   let sheetList = [];
   try {
-    const { scriptsFromWorkbook } = await import('./xlsx.js?v=2.5');
+    const { scriptsFromWorkbook } = await import('./xlsx.js?v=2.6');
     sheetList = await loadSheets();
     rows = scriptsFromWorkbook(sheetList);
   } catch (e) {
@@ -812,12 +848,13 @@ function spreadDates(rows, lineOf, keyFor, existing, start) {
 function applyImport(rows, target = null, start = todayISO(), layout = 'calendar') {
   const { lineOf, keyFor, existing } = importPlan(rows, target);
   // Cada nicho del archivo queda organizado como se eligió.
+  const toCalendar = [];
   for (const line of new Set(rows.map(lineOf))) {
     const n = nicheOf(line);
+    if (n && isList(line) && layout === 'calendar') toCalendar.push(line);
     if (n) n.layout = layout;
     else niches.push({ name: line, perDay: 3, layout });
   }
-  saveNiches(niches);
   const auto = layout === 'list' ? new Map() : spreadDates(rows, lineOf, keyFor, existing, start);
   // Orden de la lista: el del archivo, después de los guiones que ya había.
   const imported = new Set(rows.map((r) => existing.get(keyFor(r))).filter(Boolean));
@@ -836,8 +873,11 @@ function applyImport(rows, target = null, start = todayISO(), layout = 'calendar
     if (s) Object.assign(s, data, { done: s.done || r.done });
     else { scripts.push({ id: uid(), createdAt: now, done: r.done, ...data }); added++; }
   }
-  if (!persist()) toast('No hay espacio para guardar todo en este dispositivo.', 6000);
-  else toast(`Listo: ${added} guiones nuevos${rows.length - added ? ` y ${rows.length - added} actualizados` : ''}.`, 4000);
+  // Un nicho que era lista y pasa a calendario: sus guiones sin fecha también se acomodan.
+  for (const line of toCalendar) spreadUndated(line, start);
+  if (!persist()) return;
+  saveNiches(niches);
+  toast(`Listo: ${added} guiones nuevos${rows.length - added ? ` y ${rows.length - added} actualizados` : ''}.`, 4000);
   const dest = target ? nicheBase(target) : '/';
   if ((location.hash.slice(1) || '/') === dest) renderLibrary(); else go(dest);
 }
@@ -879,7 +919,9 @@ function edInput() {
   const s = getScript(editId);
   if (!s) return;
   s.title = $('#ed-title').value;
-  s.category = $('#ed-cat').value.trim();
+  const cat = $('#ed-cat').value.trim();
+  if (cat !== s.category) s.xkey = rekey(s.xkey, s.category, cat);
+  s.category = cat;
   s.date = $('#ed-date').value;
   s.text = $('#ed-text').value;
   s.updatedAt = Date.now();
@@ -935,9 +977,12 @@ function closePrompter() {
   cancelCountdown();
   stopPrompting();
   if (P.recording) { P.recording = false; clearInterval(P.recTimer); P.recorder?.stop(); }
-  P.bridge?.stop();
+  P.bridge?.release();
   stopCamera();
   cancelAnimationFrame(P.raf);
+  P.touching = false;
+  P.fingerDown = false;
+  clearTimeout(P.manualTimer);
   try { P.wake?.release(); } catch { /* nada */ }
   P.wake = null;
   P.voice = null;
@@ -1078,6 +1123,7 @@ function voiceError(code) {
     'audio-capture': 'No pude usar el micrófono para seguir tu voz.',
     'network': 'El reconocimiento de voz necesita conexión a internet.',
     'language-not-supported': 'Ese idioma no está disponible para el reconocimiento de voz.',
+    giveup: 'El reconocimiento de voz no responde. Cerrá y volvé a abrir el guion, o usá el modo Auto.',
   };
   const msg = msgs[code] || `Error de voz: ${code}`;
   toast(msg, 5000);
@@ -1171,6 +1217,8 @@ async function startCamera() {
   try {
     const { stream, audio } = await openCamera();
     if (currentView !== 'prompter' || !settings.camera) { stream.getTracks().forEach((t) => t.stop()); return false; }
+    // Dos aperturas a la vez (volver a la app + grabar): se queda la primera.
+    if (P.stream) { stream.getTracks().forEach((t) => t.stop()); return true; }
     P.stream = stream;
     P.hasAudio = audio;
     watchAudio(stream.getAudioTracks()[0]);
@@ -1235,7 +1283,9 @@ async function onRecord() {
       stopCamera();
       if (!(await startCamera())) return;
     }
+    if (currentView !== 'prompter' || !P.stream) return; // saliste mientras se preparaba
     if (!(await P.bridge.prepare(P.stream.getAudioTracks()[0]))) toast('No pude abrir el micrófono: esta toma se va a grabar sin sonido.', 5000);
+    if (currentView !== 'prompter' || !P.stream) { P.bridge.release(); return; }
     if (P.mode === 'voice') { startVoice(); P.voice && (P.voice.paused = true); }
     startCountdown(Number(settings.countdown) || 0, beginRecording);
   } finally {
@@ -1265,6 +1315,7 @@ function cancelCountdown() {
 }
 
 function beginRecording() {
+  if (currentView !== 'prompter' || !P.stream) return;
   try {
     // Video de la cámara + la salida fija del puente de audio (nunca se corta).
     logVoice('rec', `inicio · micrófono: ${audioState(P.bridge.track)}`);
@@ -1302,9 +1353,12 @@ async function stopRecording() {
   const silent = P.bridge.silentRatio();
   logVoice('rec', `fin · micrófono: ${audioState(P.bridge.track)} · silencio del sistema: ${Math.round(silent * 100)}%`);
   if (P.voice) P.voice.gentle = false;
+  // Primero se cierra la grabación y después se corta la voz (cortarla puede silenciar el micrófono).
+  const pending = P.recorder.stop();
   stopPrompting();
-  const blob = await P.recorder.stop();
+  const blob = await pending;
   P.recorder = null;
+  P.bridge.release();
   if (!blob.size) { toast('La grabación quedó vacía. Probá de nuevo.'); return; }
   showTake(blob, duration, silent);
 }
@@ -1321,6 +1375,8 @@ function showTake(blob, duration, silent = 0) {
     const askClose = async () => {
       if (saved || (await confirmSheet('No guardaste esta toma. ¿Descartarla?', 'Descartar'))) close();
     };
+    const closeBtn = h('button', { class: 'btn', onclick: askClose }, 'Cerrar sin guardar');
+    const markSaved = () => { saved = true; closeBtn.textContent = 'Cerrar'; };
     sh.append(
       h('h2', {}, 'Tu toma'),
       h('video', {
@@ -1338,16 +1394,21 @@ function showTake(blob, duration, silent = 0) {
       silent > 0.5 ? h('p', { class: 'warn' }, '⚠︎ El iPhone silenció el micrófono durante casi toda la toma. Volvé a grabarla; si se repite, copiame el registro de voz desde Ajustes.')
         : silent > 0.08 ? h('p', { class: 'warn' }, `⚠︎ La toma tuvo cortes de sonido (~${Math.round(silent * duration)} s). Escuchala antes de guardarla.`) : null,
       h('div', { class: 'sheet-actions' },
-        h('button', { class: 'btn primary', onclick: () => { saved = true; shareOrDownload(blob, name, s?.title); } },
+        h('button', { class: 'btn primary', onclick: async () => { if (await shareOrDownload(blob, name, s?.title)) markSaved(); } },
           canShare ? 'Guardar en Fotos / Compartir' : 'Descargar video'),
-        canShare ? h('button', { class: 'btn', onclick: () => { saved = true; download(blob, name); } }, 'Descargar archivo') : null,
+        canShare ? h('button', { class: 'btn', onclick: () => { download(blob, name); markSaved(); } }, 'Descargar archivo') : null,
         s && !s.done ? h('button', { class: 'btn ok', onclick: (e) => { setDone(s, true); e.currentTarget.textContent = '✓ Guion marcado como hecho'; e.currentTarget.disabled = true; } }, 'Marcar guion como hecho') : null,
-        h('button', { class: 'btn', onclick: askClose }, saved ? 'Cerrar' : 'Cerrar sin guardar')));
+        closeBtn));
   }, { dismissable: false, onClose: () => URL.revokeObjectURL(url) });
 }
 
 async function requestWake() {
-  try { P.wake = await navigator.wakeLock?.request('screen'); } catch { /* no soportado */ }
+  try { P.wake?.release(); } catch { /* nada */ }
+  P.wake = null;
+  try {
+    const lock = await navigator.wakeLock?.request('screen');
+    if (currentView === 'prompter') P.wake = lock; else lock?.release();
+  } catch { /* no soportado */ }
 }
 
 // ---------- Ajustes ----------
@@ -1562,7 +1623,11 @@ function bind() {
   window.addEventListener('resize', () => requestAnimationFrame(relayout));
   window.addEventListener('hashchange', route);
 
+  // Al salir de la app (o pasar a otra), se guarda ya lo que se estaba escribiendo.
+  const flush = () => { if (currentView === 'editor') { clearTimeout(saveTimer); persist(); } };
+  window.addEventListener('pagehide', flush);
   document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flush();
     if (currentView !== 'prompter') return;
     if (document.visibilityState === 'hidden') {
       if (P.recording) stopRecording();

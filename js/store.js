@@ -10,6 +10,17 @@ function read(key, fallback) {
   } catch { return fallback; }
 }
 
+// Si lo guardado está dañado, se guarda una copia aparte antes de seguir: nunca se pisa.
+function readSafe(key) {
+  let raw = null;
+  try { raw = localStorage.getItem(key); } catch { return { missing: false, value: null }; }
+  if (raw == null) return { missing: true, value: null };
+  try { return { missing: false, value: JSON.parse(raw) }; } catch {
+    try { localStorage.setItem(`${key}.danado.${Date.now()}`, raw); } catch { /* sin espacio */ }
+    return { missing: false, value: null };
+  }
+}
+
 function write(key, value) {
   try { localStorage.setItem(key, JSON.stringify(value)); return true; } catch { return false; }
 }
@@ -25,12 +36,13 @@ Cuando estés listo, apretá el botón rojo para grabar. Hay una cuenta regresiv
 Ahora sí: creá un guion nuevo, pegá tu texto y a grabar.`;
 
 export function loadScripts() {
-  let list = read(SCRIPTS_KEY, null);
-  if (!Array.isArray(list)) {
-    const now = Date.now();
-    list = [{ id: uid(), title: 'Guion de prueba', category: '', text: SAMPLE, createdAt: now, updatedAt: now }];
-    write(SCRIPTS_KEY, list);
-  }
+  const { missing, value } = readSafe(SCRIPTS_KEY);
+  if (Array.isArray(value)) return value;
+  // El guion de ejemplo solo se crea la primera vez (nunca sobre datos que no se pudieron leer).
+  if (!missing) return [];
+  const now = Date.now();
+  const list = [{ id: uid(), title: 'Guion de prueba', category: '', text: SAMPLE, createdAt: now, updatedAt: now }];
+  write(SCRIPTS_KEY, list);
   return list;
 }
 
@@ -83,7 +95,8 @@ export function defaultSettings() {
 }
 
 export function loadSettings() {
-  const saved = read(SETTINGS_KEY, {});
+  const stored = read(SETTINGS_KEY, {});
+  const saved = stored && typeof stored === 'object' ? stored : {};
   if (saved.layoutVersion !== LAYOUT_VERSION) {
     for (const k of [...LAYOUT_KEYS, 'boxHeight', 'layoutVersion']) delete saved[k];
   }

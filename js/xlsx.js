@@ -1,6 +1,10 @@
 // Lector mínimo de .xlsx, sin librerías: un .xlsx es un ZIP con XML adentro.
 // Todo pasa en el dispositivo; el archivo no se sube a ningún lado.
 
+const MAX_UNZIPPED = 80 * 1024 * 1024; // un archivo dañado o malicioso no puede inflarse sin fin
+const MAX_ROWS = 50000;
+const MAX_COLS = 500;
+
 async function unzip(buf) {
   const dv = new DataView(buf);
   let eocd = -1;
@@ -28,8 +32,17 @@ async function unzip(buf) {
     const data = new Uint8Array(buf, start, f.size);
     if (f.method === 0) return dec.decode(data);
     if (f.method !== 8) throw new Error('Formato de compresión no soportado.');
-    const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-    return new Response(stream).text();
+    const reader = new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw')).getReader();
+    const parts = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.length;
+      if (total > MAX_UNZIPPED) { reader.cancel(); throw new Error('El archivo es demasiado grande.'); }
+      parts.push(value);
+    }
+    return new TextDecoder().decode(await new Blob(parts).arrayBuffer());
   };
 }
 
@@ -98,11 +111,13 @@ export async function readWorkbook(file) {
     let rowNum = 0;
     for (const row of xml(sheetXml).getElementsByTagName('row')) {
       rowNum = Number(row.getAttribute('r')) || rowNum + 1;
+      if (rowNum > MAX_ROWS) break;
       const cells = [];
       let col = -1;
       for (const c of row.getElementsByTagName('c')) {
         const at = colIndex(c.getAttribute('r'));
         col = at >= 0 ? at : col + 1;
+        if (col >= MAX_COLS) break;
         const t = c.getAttribute('t');
         const v = c.getElementsByTagName('v')[0]?.textContent;
         let val = '';
@@ -249,7 +264,8 @@ function excelDate(v) {
   if (v == null || v === '') return '';
   const n = Number(v);
   if (Number.isFinite(n) && n > 20000) {
-    const d = new Date(Date.UTC(1899, 11, 30) + Math.round(n) * 86400000);
+    // Solo la parte entera es el día (45940.75 = ese día a las 18:00, no el siguiente).
+    const d = new Date(Date.UTC(1899, 11, 30) + Math.floor(n) * 86400000);
     return d.toISOString().slice(0, 10);
   }
   const m = String(v).match(/(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})/);
