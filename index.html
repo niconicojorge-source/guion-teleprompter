@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Guion</title>
+  <meta name="description" content="Teleprompter que sigue tu voz y graba video.">
+  <meta name="theme-color" content="#0b0b0f">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Guion">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="icon" type="image/png" href="icons/icon-192.png">
+  <link rel="stylesheet" href="css/app.css">
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+
+  <!-- Biblioteca -->
+  <section id="view-library" class="view">
+    <div class="wrap">
+      <header class="lib-header">
+        <h1>Guion</h1>
+        <button id="btn-import" class="icon-btn" aria-label="Importar archivo de texto"></button>
+      </header>
+      <input id="search" class="search" type="search" placeholder="Buscar guiones" autocomplete="off">
+      <div id="chips" class="chips" hidden></div>
+      <ul id="script-list" class="script-list"></ul>
+      <p id="empty" class="empty" hidden></p>
+    </div>
+    <button id="btn-new" class="fab">+ Nuevo guion</button>
+    <input id="file-import" type="file" accept=".txt,.md,text/plain,text/markdown" multiple hidden>
+  </section>
+
+  <!-- Editor -->
+  <section id="view-editor" class="view">
+    <header class="bar">
+      <button id="ed-back" class="text-btn">‹ Guiones</button>
+      <div class="bar-right">
+        <button id="ed-more" class="icon-btn" aria-label="Más opciones"></button>
+        <button id="ed-read" class="pill-btn">Leer</button>
+      </div>
+    </header>
+    <div class="ed-body">
+      <input id="ed-title" class="ed-title" placeholder="Título" autocomplete="off">
+      <input id="ed-cat" class="ed-cat" placeholder="Categoría (opcional)" list="cat-list" autocomplete="off">
+      <datalist id="cat-list"></datalist>
+      <textarea id="ed-text" placeholder="Escribí o pegá tu guion acá…"></textarea>
+    </div>
+    <footer id="ed-stats" class="ed-stats"></footer>
+  </section>
+
+  <!-- Teleprompter -->
+  <section id="view-prompter" class="view prompter">
+    <div class="stage">
+      <div id="frame" class="frame" hidden>
+        <video id="cam" playsinline muted autoplay></video>
+        <div id="safe" class="safe"></div>
+        <div id="face" class="face-guide" hidden></div>
+      </div>
+    </div>
+
+    <div class="top-area">
+      <div id="text-box" class="text-box">
+        <div id="scroller" class="scroller"><div id="script" class="script"></div></div>
+        <div class="reading-line"></div>
+      </div>
+      <div class="status">
+        <div id="rec-time" class="rec-time" hidden>00:00</div>
+        <div id="heard" class="heard" hidden></div>
+      </div>
+    </div>
+
+    <div class="hud-bottom">
+      <div id="modes" class="modes" role="tablist">
+        <button data-mode="voice">Voz</button>
+        <button data-mode="auto">Auto</button>
+        <button data-mode="manual">Manual</button>
+      </div>
+      <div class="controls">
+        <button id="pr-close" class="round-btn" aria-label="Cerrar"></button>
+        <button id="pr-restart" class="round-btn" aria-label="Volver al inicio"></button>
+        <button id="pr-rec" class="rec-btn" aria-label="Grabar"></button>
+        <button id="pr-play" class="round-btn" aria-label="Iniciar o pausar"></button>
+        <button id="pr-settings" class="round-btn" aria-label="Ajustes"></button>
+      </div>
+    </div>
+
+    <div id="countdown" class="countdown" hidden></div>
+  </section>
+
+  <div id="toast" class="toast" hidden></div>
+</body>
+</html>
