@@ -1,9 +1,10 @@
-import { loadScripts, saveScripts, loadSettings, saveSettings, defaultSettings, LAYOUT_KEYS, uid } from './store.js';
-import { norm } from './matcher.js';
-import { VoiceFollower, voiceSupported } from './voice.js';
-import { openCamera, Recorder, pickMime } from './camera.js';
+// El ?v= de cada import hace que una versión nunca se mezcle con archivos viejos en caché.
+import { loadScripts, saveScripts, loadSettings, saveSettings, defaultSettings, LAYOUT_KEYS, uid } from './store.js?v=1.3';
+import { norm } from './matcher.js?v=1.3';
+import { VoiceFollower, voiceSupported } from './voice.js?v=1.3';
+import { openCamera, Recorder, pickMime } from './camera.js?v=1.3';
 
-const VERSION = '1.2';
+const VERSION = '1.3';
 
 // ---------- Utilidades ----------
 const $ = (s, root = document) => root.querySelector(s);
@@ -155,6 +156,7 @@ function showLibrary() {
 }
 
 function renderLibrary() {
+  $('#version').textContent = `Guion v${VERSION}` + (voiceSupported ? '' : ' · sin reconocimiento de voz en este navegador');
   const q = fold($('#search').value.trim());
   const cats = categories();
   if (activeCat && !cats.includes(activeCat)) activeCat = null;
@@ -286,7 +288,7 @@ const P = {
   y: 0, targetY: null, pos: -1, painted: -1, words: [], els: [],
   voice: null, stream: null, hasAudio: false, recorder: null,
   touching: false, fingerDown: false, manualTimer: 0,
-  rate: 0, lastMoveAt: 0,
+  rate: 0, lastMoveAt: 0, heardAny: false, watchdog: 0,
   raf: 0, last: 0, wake: null, cdTimer: 0, recTimer: 0, recStart: 0,
   errAt: {},
 };
@@ -435,7 +437,7 @@ function scheduleManualEnd() {
 
 function setMode(mode, initial = false) {
   if (mode === 'voice' && !voiceSupported) {
-    if (!initial) toast('Este navegador no tiene reconocimiento de voz. Usá Safari o Chrome.');
+    toast('Este navegador no tiene reconocimiento de voz, así que pasé a modo Auto. Abrí la app en Safari.', 6000);
     mode = 'auto';
   }
   const was = P.mode;
@@ -467,7 +469,16 @@ function voiceError(code) {
     'network': 'El reconocimiento de voz necesita conexión a internet.',
     'language-not-supported': 'Ese idioma no está disponible para el reconocimiento de voz.',
   };
-  toast(msgs[code] || `Error de voz: ${code}`, 5000);
+  const msg = msgs[code] || `Error de voz: ${code}`;
+  toast(msg, 5000);
+  showStatus('⚠︎ ' + msg);
+}
+
+// Mensaje en la burbuja de estado, aunque "Mostrar lo que escucho" esté apagado.
+function showStatus(text) {
+  const el = $('#heard');
+  el.textContent = text;
+  el.hidden = false;
 }
 
 function startVoice() {
@@ -482,14 +493,24 @@ function startVoice() {
   Object.assign(P.voice, { lang: settings.lang, words: P.words, pos: P.pos });
   P.voice.start();
   showHeard('Escuchando…');
+  // Si en unos segundos no llegó nada del reconocimiento, avisamos en pantalla.
+  P.heardAny = false;
+  clearTimeout(P.watchdog);
+  P.watchdog = setTimeout(() => {
+    if (P.mode === 'voice' && P.voice?.active && !P.heardAny) {
+      showStatus('⚠︎ No me llega nada del reconocimiento de voz. Revisá Siri y Dictado y el permiso de micrófono.');
+    }
+  }, 7000);
 }
 
 function stopVoice() {
+  clearTimeout(P.watchdog);
   P.voice?.stop();
   $('#heard').hidden = true;
 }
 
 function showHeard(text) {
+  if (text !== 'Escuchando…') P.heardAny = true;
   const el = $('#heard');
   if (!settings.showHeard) { el.hidden = true; return; }
   const t = text.trim();

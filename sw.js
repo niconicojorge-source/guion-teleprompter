@@ -1,12 +1,15 @@
 // Red primero (para recibir siempre la última versión) y caché como respaldo sin conexión.
-const CACHE = 'guion-v3';
+const CACHE = 'guion-v4';
 const ASSETS = [
   './', 'index.html', 'css/app.css', 'js/app.js', 'js/store.js', 'js/matcher.js', 'js/voice.js', 'js/camera.js',
   'manifest.webmanifest', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png',
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  // cache: 'reload' evita guardar copias viejas que el navegador tenga en su caché HTTP.
+  e.waitUntil(caches.open(CACHE)
+    .then((c) => c.addAll(ASSETS.map((u) => new Request(u, { cache: 'reload' }))))
+    .then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {
@@ -19,7 +22,8 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
   e.respondWith(
-    fetch(req)
+    // no-cache: siempre se consulta al servidor (si no cambió, responde 304 y es rápido).
+    fetch(req, { cache: 'no-cache' })
       .then((res) => {
         if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)); }
         return res;
