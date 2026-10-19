@@ -1,11 +1,11 @@
 // El ?v= de cada import hace que una versión nunca se mezcle con archivos viejos en caché.
-import { loadScripts, saveScripts, loadSettings, saveSettings, loadNiches, saveNiches, defaultSettings, LAYOUT_KEYS, uid } from './store.js?v=2.6';
-import { norm } from './matcher.js?v=2.6';
-import { VoiceFollower, voiceSupported, voiceLog, logVoice } from './voice.js?v=2.6';
-import { openCamera, Recorder, pickMime } from './camera.js?v=2.6';
-import { AudioBridge } from './audio.js?v=2.6';
+import { loadScripts, saveScripts, loadSettings, saveSettings, loadNiches, saveNiches, defaultSettings, LAYOUT_KEYS, uid } from './store.js?v=2.7';
+import { norm } from './matcher.js?v=2.7';
+import { VoiceFollower, voiceSupported, voiceLog, logVoice } from './voice.js?v=2.7';
+import { openCamera, Recorder, pickMime } from './camera.js?v=2.7';
+import { AudioBridge } from './audio.js?v=2.7';
 
-const VERSION = '2.6';
+const VERSION = '2.7';
 
 // ---------- Utilidades ----------
 const $ = (s, root = document) => root.querySelector(s);
@@ -674,7 +674,7 @@ function pickExcel(target) {
 // Acepta cualquier archivo y se fija qué es por su contenido, no solo por el nombre:
 // Excel (.xlsx), CSV, Word (.docx) o texto. Lo que no se puede leer explica cómo exportarlo.
 async function importFiles(files, target = null) {
-  const xlsx = () => import('./xlsx.js?v=2.6');
+  const xlsx = () => import('./xlsx.js?v=2.7');
   let texts = 0;
   const addText = (name, text) => {
     const now = Date.now();
@@ -749,7 +749,7 @@ async function importExcel(file, target, loadSheets) {
   let rows;
   let sheetList = [];
   try {
-    const { scriptsFromWorkbook } = await import('./xlsx.js?v=2.6');
+    const { scriptsFromWorkbook } = await import('./xlsx.js?v=2.7');
     sheetList = await loadSheets();
     rows = scriptsFromWorkbook(sheetList);
   } catch (e) {
