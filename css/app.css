@@ -117,13 +117,15 @@ svg { display: block; }
 .safe .zone span { position: absolute; left: 8px; bottom: 6px; font-size: 11px; font-weight: 600; color: rgba(255, 255, 255, 0.8); text-shadow: 0 1px 3px #000; }
 .face-guide { position: absolute; left: 50%; top: 46%; width: 52%; aspect-ratio: 3 / 4; transform: translate(-50%, -50%); border: 2px dashed rgba(255, 255, 255, 0.55); border-radius: 50%; pointer-events: none; }
 
-.top-area { position: absolute; top: var(--sat); left: var(--sal); right: var(--sar); display: flex; flex-direction: column; align-items: center; pointer-events: none; }
+/* Columna angosta pegada a la cámara: los ojos casi no se mueven al leer. */
+.top-area { position: absolute; top: calc(var(--sat) + 4px); left: var(--sal); right: var(--sar); display: flex; flex-direction: column; align-items: center; pointer-events: none; }
 .text-box {
   position: relative;
-  width: 100%;
-  height: calc((100dvh - var(--sat)) * var(--box-h, 0.45));
-  background: rgba(0, 0, 0, var(--box-op, 0.55));
-  border-radius: 0 0 22px 22px;
+  width: calc(100% * var(--box-w, 0.5));
+  min-width: 140px;
+  height: calc(var(--fs, 21px) * (1.32 * var(--lines, 5) + 0.6));
+  background: rgba(0, 0, 0, var(--box-op, 0.6));
+  border-radius: 18px;
   pointer-events: auto;
 }
 .scroller {
@@ -132,8 +134,8 @@ svg { display: block; }
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 9%, #000 84%, transparent 100%);
-  mask-image: linear-gradient(to bottom, transparent 0, #000 9%, #000 84%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 calc(var(--fs, 21px) * 0.45), #000 calc(100% - var(--fs, 21px) * 0.6), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 calc(var(--fs, 21px) * 0.45), #000 calc(100% - var(--fs, 21px) * 0.6), transparent 100%);
 }
 .scroller::-webkit-scrollbar { display: none; }
 .text-box.mirror .scroller { transform: scaleX(-1); }
@@ -142,11 +144,11 @@ svg { display: block; }
   position: relative;
   max-width: 1100px;
   margin: 0 auto;
-  padding-left: var(--margin, 6%);
-  padding-right: var(--margin, 6%);
-  font-size: var(--fs, 34px);
+  padding-left: var(--margin, 12px);
+  padding-right: var(--margin, 12px);
+  font-size: var(--fs, 21px);
   line-height: 1.32;
-  font-weight: 650;
+  font-weight: 620;
   letter-spacing: -0.005em;
   color: #fff;
   overflow-wrap: break-word;
@@ -159,8 +161,8 @@ svg { display: block; }
 .w.read { color: rgba(255, 255, 255, 0.32); }
 .w.cur { color: var(--accent); }
 
-.reading-line { position: absolute; left: 0; right: 0; top: calc(var(--read, 0.22) * 100% + var(--fs, 34px) * 0.66); pointer-events: none; }
-.reading-line::before { content: ""; position: absolute; left: max(2px, calc(max(0px, 50% - 550px) + var(--margin, 6%) - 16px)); top: -7px; border-style: solid; border-width: 7px 0 7px 10px; border-color: transparent transparent transparent var(--accent); }
+.reading-line { position: absolute; left: 0; right: 0; top: calc(var(--read, 0.28) * 100% + var(--fs, 21px) * 0.66); pointer-events: none; }
+.reading-line::before { content: ""; position: absolute; left: max(1px, calc(max(0px, 50% - 550px) + var(--margin, 12px) - 11px)); top: -6px; border-style: solid; border-width: 6px 0 6px 8px; border-color: transparent transparent transparent var(--accent); }
 
 .status { display: flex; gap: 8px; align-items: center; margin-top: 10px; max-width: 92%; }
 .rec-time { display: flex; align-items: center; gap: 6px; background: rgba(0, 0, 0, 0.6); border-radius: 999px; padding: 4px 11px; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -256,3 +258,4 @@ svg { display: block; }
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
   animation: fade 0.2s;
 }
+.link-btn { display: block; width: 100%; text-align: left; padding: 13px 0; color: var(--accent); font-size: 15px; border-bottom: 1px solid rgba(255, 255, 255, 0.07); }

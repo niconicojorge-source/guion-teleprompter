@@ -1,9 +1,9 @@
-import { loadScripts, saveScripts, loadSettings, saveSettings, uid } from './store.js';
+import { loadScripts, saveScripts, loadSettings, saveSettings, defaultSettings, LAYOUT_KEYS, uid } from './store.js';
 import { norm } from './matcher.js';
 import { VoiceFollower, voiceSupported } from './voice.js';
 import { openCamera, Recorder, pickMime } from './camera.js';
 
-const VERSION = '1.0';
+const VERSION = '1.1';
 
 // ---------- Utilidades ----------
 const $ = (s, root = document) => root.querySelector(s);
@@ -286,6 +286,7 @@ const P = {
   y: 0, targetY: null, pos: -1, painted: -1, words: [], els: [],
   voice: null, stream: null, hasAudio: false, recorder: null,
   touching: false, fingerDown: false, manualTimer: 0,
+  rate: 0, lastMoveAt: 0,
   raf: 0, last: 0, wake: null, cdTimer: 0, recTimer: 0, recStart: 0,
   errAt: {},
 };
@@ -358,7 +359,22 @@ function targetFor(pos) {
   return idx >= 0 ? Math.max(0, P.els[idx].offsetTop - readPx()) : 0;
 }
 
+// Ritmo de lectura (palabras/seg) estimado a partir de los avances de la voz.
+function trackRate(pos) {
+  const now = performance.now();
+  const dw = pos - P.pos;
+  const dt = (now - P.lastMoveAt) / 1000;
+  if (dw > 0 && dw <= 8 && dt > 0.05 && dt < 3) {
+    const inst = Math.min(4.5, Math.max(1, dw / dt));
+    P.rate = P.rate ? P.rate * 0.7 + inst * 0.3 : inst;
+  } else if (dw < 0 || dw > 8) {
+    P.rate = 0;
+  }
+  P.lastMoveAt = now;
+}
+
 function setPos(pos, fromUser = false) {
+  if (fromUser) { P.rate = 0; P.lastMoveAt = 0; } else trackRate(pos);
   P.pos = pos;
   paint(pos);
   P.targetY = targetFor(pos);
@@ -378,9 +394,16 @@ function tick(t) {
       P.y = Math.min(max, P.y + settings.speed * settings.fontSize * 0.12 * dt);
       sc.scrollTop = P.y;
     } else if (P.mode === 'voice' && P.targetY != null) {
-      const d = P.targetY - P.y;
+      // El reconocimiento llega con ~0,5 s de demora: si venís leyendo a ritmo,
+      // el texto se adelanta hasta 2 palabras para no quedar atrás.
+      let target = P.targetY;
+      if (P.playing && P.rate && P.lastMoveAt) {
+        const ahead = Math.min(2, Math.round(P.rate * Math.min(0.6, (t - P.lastMoveAt) / 1000)));
+        if (ahead > 0) target = targetFor(P.pos + ahead);
+      }
+      const d = target - P.y;
       if (Math.abs(d) > 0.5) {
-        P.y += d * (1 - Math.exp(-dt * 6));
+        P.y += d * (1 - Math.exp(-dt * 9));
         sc.scrollTop = P.y;
       }
     }
@@ -497,6 +520,7 @@ function restart() {
   paint(-1);
   P.y = 0;
   P.targetY = 0;
+  P.rate = 0;
   scroller().scrollTop = 0;
   if (P.voice) { P.voice.pos = -1; P.voice.resetSession(); }
 }
@@ -655,13 +679,15 @@ const SAFE = {
 const pct = (v) => v + '%';
 const SETTINGS_UI = [
   { section: 'Texto' },
-  { key: 'fontSize', label: 'Tamaño de letra', type: 'range', min: 18, max: 96, fmt: (v) => v + ' px' },
-  { key: 'speed', label: 'Velocidad (modo Auto)', type: 'range', min: 1, max: 20 },
-  { key: 'boxHeight', label: 'Alto del área de texto', type: 'range', min: 20, max: 90, fmt: pct },
-  { key: 'readPos', label: 'Línea de lectura', type: 'range', min: 5, max: 60, fmt: pct },
-  { key: 'margin', label: 'Márgenes', type: 'range', min: 0, max: 25, fmt: pct },
+  { key: 'fontSize', label: 'Tamaño de letra', type: 'range', min: 14, max: 80, fmt: (v) => v + ' px' },
+  { key: 'boxWidth', label: 'Ancho del texto', type: 'range', min: 25, max: 100, fmt: pct },
+  { key: 'lines', label: 'Líneas visibles', type: 'range', min: 2, max: 15 },
+  { key: 'readPos', label: 'Línea de lectura', type: 'range', min: 0, max: 70, fmt: pct },
+  { key: 'margin', label: 'Márgenes', type: 'range', min: 0, max: 60, fmt: (v) => v + ' px' },
   { key: 'boxOpacity', label: 'Fondo del texto', type: 'range', min: 0, max: 100, fmt: pct },
+  { key: 'speed', label: 'Velocidad (modo Auto)', type: 'range', min: 1, max: 20 },
   { key: 'mirrorText', label: 'Espejar texto (para vidrio)', type: 'switch' },
+  { action: 'Restaurar tamaño y posición', run: resetLayout },
   { section: 'Cámara' },
   { key: 'camera', label: 'Mostrar cámara', type: 'switch' },
   { key: 'mirrorPreview', label: 'Vista previa en espejo', type: 'switch' },
@@ -718,11 +744,21 @@ function infoText() {
 }
 
 function openSettings() {
-  sheet((sh) => {
+  sheet((sh, close) => {
     sh.append(h('h2', {}, 'Ajustes'));
-    for (const f of SETTINGS_UI) sh.append(f.section ? h('h3', { class: 'sec' }, f.section) : settingRow(f));
+    for (const f of SETTINGS_UI) {
+      if (f.section) sh.append(h('h3', { class: 'sec' }, f.section));
+      else if (f.action) sh.append(h('button', { class: 'link-btn', onclick: () => { f.run(); close(); openSettings(); } }, f.action));
+      else sh.append(settingRow(f));
+    }
     sh.append(h('p', { class: 'info' }, infoText()));
   }, { clear: true });
+}
+
+function resetLayout() {
+  const d = defaultSettings();
+  for (const k of LAYOUT_KEYS) settings[k] = d[k];
+  changed();
 }
 
 function changed(key) {
@@ -736,9 +772,10 @@ function changed(key) {
 function applySettings() {
   const st = $('#view-prompter').style;
   st.setProperty('--fs', settings.fontSize + 'px');
-  st.setProperty('--box-h', settings.boxHeight / 100);
+  st.setProperty('--box-w', settings.boxWidth / 100);
+  st.setProperty('--lines', settings.lines);
   st.setProperty('--read', settings.readPos / 100);
-  st.setProperty('--margin', settings.margin + '%');
+  st.setProperty('--margin', settings.margin + 'px');
   st.setProperty('--box-op', settings.boxOpacity / 100);
   $('#text-box').classList.toggle('mirror', settings.mirrorText);
   $('#frame').classList.toggle('selfie', settings.mirrorPreview);

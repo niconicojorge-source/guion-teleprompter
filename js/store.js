@@ -45,16 +45,23 @@ function guessLang() {
   return 'es-AR';
 }
 
+// Cambia cuando cambia el diseño del área de texto: los ajustes de tamaño/posición
+// guardados con un diseño anterior se reemplazan por los nuevos valores por defecto.
+const LAYOUT_VERSION = 2;
+export const LAYOUT_KEYS = ['fontSize', 'boxWidth', 'lines', 'readPos', 'margin', 'boxOpacity'];
+
 export function defaultSettings() {
   const wide = Math.min(window.innerWidth, window.innerHeight) > 700;
   return {
+    layoutVersion: LAYOUT_VERSION,
     mode: 'voice',
-    fontSize: wide ? 48 : 34,
+    fontSize: wide ? 30 : 21,
     speed: 5,
-    boxHeight: 45,
-    readPos: 22,
-    margin: 6,
-    boxOpacity: 55,
+    boxWidth: wide ? 55 : 50,
+    lines: 5,
+    readPos: 28,
+    margin: 12,
+    boxOpacity: 60,
     mirrorText: false,
     camera: true,
     mirrorPreview: true,
@@ -66,5 +73,11 @@ export function defaultSettings() {
   };
 }
 
-export function loadSettings() { return { ...defaultSettings(), ...read(SETTINGS_KEY, {}) }; }
+export function loadSettings() {
+  const saved = read(SETTINGS_KEY, {});
+  if (saved.layoutVersion !== LAYOUT_VERSION) {
+    for (const k of [...LAYOUT_KEYS, 'boxHeight', 'layoutVersion']) delete saved[k];
+  }
+  return { ...defaultSettings(), ...saved };
+}
 export function saveSettings(s) { write(SETTINGS_KEY, s); }

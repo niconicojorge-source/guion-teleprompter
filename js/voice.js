@@ -88,6 +88,12 @@ export class VoiceFollower {
     let tail = tokenize(last);
     for (let i = res.length - 2; i >= 0 && tail.length < 8; i--) tail = tokenize(res[i][0].transcript).concat(tail);
     tail = tail.slice(-8);
+    // Al principio de cada sesión (por ejemplo después de una pausa) hay pocas palabras
+    // para comparar: sumamos como contexto las últimas palabras ya leídas del guion,
+    // así la primera palabra que digas alcanza para retomar.
+    if (tail.length < 4 && this.pos >= 0) {
+      tail = this.words.slice(Math.max(0, this.pos - 2), this.pos + 1).concat(tail);
+    }
     this.onHeard?.(last);
     if (this.paused || !tail.length) return;
     const p = locate(this.words, tail, this.pos);
