@@ -163,6 +163,7 @@ export function scriptsFromWorkbook(sheets) {
         ['Notas', get(r, 'notes')],
       ].filter(([, v]) => v && v !== '—');
       out.push({
+        sheet: s.name,
         line,
         code: get(r, 'code'),
         date: excelDate(r[cols.date]),

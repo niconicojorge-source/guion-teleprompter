@@ -36,6 +36,14 @@ export function loadScripts() {
 
 export function saveScripts(list) { return write(SCRIPTS_KEY, list); }
 
+// Nichos creados por el usuario (con o sin guiones): [{ name, perDay }]
+const NICHES_KEY = 'guion.niches.v1';
+export function loadNiches() {
+  const list = read(NICHES_KEY, []);
+  return Array.isArray(list) ? list : [];
+}
+export function saveNiches(list) { return write(NICHES_KEY, list); }
+
 const LANGS = ['es-AR', 'es-ES', 'es-MX', 'es-US', 'en-US', 'pt-BR'];
 function guessLang() {
   const l = navigator.language || 'es-AR';

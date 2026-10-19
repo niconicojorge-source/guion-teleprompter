@@ -101,7 +101,9 @@ svg { display: block; }
 .pill-btn { height: 36px; padding: 0 18px; border-radius: 999px; background: var(--accent); color: var(--accent-ink); font-weight: 700; }
 .ed-body { flex: 1; display: flex; flex-direction: column; max-width: 820px; width: 100%; margin: 0 auto; padding: 0 20px; min-height: 0; }
 .ed-title { background: none; border: 0; outline: none; font-size: 28px; font-weight: 800; padding: 6px 0; letter-spacing: -0.01em; }
-.ed-cat { background: none; border: 0; outline: none; color: var(--muted); font-size: 16px; padding: 2px 0 12px; border-bottom: 1px solid var(--line); }
+.ed-meta { display: flex; gap: 12px; align-items: center; padding: 2px 0 12px; border-bottom: 1px solid var(--line); }
+.ed-cat { flex: 1; min-width: 0; background: none; border: 0; outline: none; color: var(--muted); font-size: 16px; padding: 0; }
+.ed-date { flex: none; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; color: var(--text); font-size: 15px; padding: 6px 8px; color-scheme: dark; }
 #ed-text { flex: 1; background: none; border: 0; outline: none; resize: none; font-size: 19px; line-height: 1.55; padding: 16px 0; min-height: 0; }
 #ed-text::placeholder, .ed-title::placeholder, .ed-cat::placeholder { color: #5a5a68; }
 .ed-stats { flex: none; padding: 10px 20px calc(var(--sab) + 10px); color: var(--muted); font-size: 13px; text-align: center; border-top: 1px solid var(--line); }
@@ -339,3 +341,24 @@ button.cal-day.all { background: rgba(48, 209, 88, 0.12); border-color: rgba(48,
 .lib-back { margin: 4px 0 2px; }
 .lib-back + .lib-header { margin-top: 6px; }
 .warn { margin: 12px 0 0; padding: 10px 12px; border-radius: 12px; background: rgba(255, 69, 58, 0.14); color: #ff8a80; font-size: 14px; line-height: 1.4; }
+
+/* ---------- Nichos ---------- */
+.niche.add button { background: transparent; border: 1.5px dashed #3a3a46; padding: 16px 14px 16px 20px; }
+.niche.add .n-name { font-size: 18px; color: var(--accent); }
+.toolbar { list-style: none; display: flex; gap: 10px; }
+.tool-btn { flex: 1; height: 44px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); display: inline-flex; align-items: center; justify-content: center; gap: 8px; font-size: 15px; font-weight: 600; }
+.tool-btn .ic svg { width: 18px; height: 18px; }
+.script-list .hint { list-style: none; color: var(--muted); font-size: 14px; line-height: 1.5; padding: 4px 4px 2px; }
+.folder.empty .f-name { color: #9a9aa8; }
+.meter.none { background: #2a2a33; }
+button.cal-day.empty { background: transparent; border: 1px solid #26262f; }
+button.cal-day.empty b { color: #6c6c7a; }
+.slot button { width: 100%; display: flex; align-items: center; gap: 14px; text-align: left; border: 1.5px dashed #3a3a46; border-radius: 16px; padding: 14px 16px; }
+.slot-plus { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: rgba(255, 197, 61, 0.14); color: var(--accent); font-size: 20px; font-weight: 700; flex: none; }
+.slot-text { display: flex; flex-direction: column; gap: 2px; }
+.slot-text strong { font-size: 16px; }
+.slot-text span { font-size: 13px; color: var(--muted); }
+.prompt-input { width: 100%; height: 48px; border-radius: 12px; background: #2a2a33; border: 1px solid #3a3a46; padding: 0 14px; font-size: 17px; outline: none; margin-top: 4px; }
+.import-sum.pick { list-style: none; padding-left: 0; }
+.import-sum.pick label { display: flex; gap: 10px; align-items: flex-start; padding: 6px 0; }
+.import-sum.pick input { width: 20px; height: 20px; margin-top: 3px; accent-color: var(--accent); flex: none; }
