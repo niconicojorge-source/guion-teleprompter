@@ -1,10 +1,10 @@
 // El ?v= de cada import hace que una versión nunca se mezcle con archivos viejos en caché.
-import { loadScripts, saveScripts, loadSettings, saveSettings, defaultSettings, LAYOUT_KEYS, uid } from './store.js?v=1.7';
-import { norm } from './matcher.js?v=1.7';
-import { VoiceFollower, voiceSupported, voiceLog } from './voice.js?v=1.7';
-import { openCamera, Recorder, pickMime } from './camera.js?v=1.7';
+import { loadScripts, saveScripts, loadSettings, saveSettings, defaultSettings, LAYOUT_KEYS, uid } from './store.js?v=1.8';
+import { norm } from './matcher.js?v=1.8';
+import { VoiceFollower, voiceSupported, voiceLog } from './voice.js?v=1.8';
+import { openCamera, Recorder, pickMime } from './camera.js?v=1.8';
 
-const VERSION = '1.7';
+const VERSION = '1.8';
 
 // ---------- Utilidades ----------
 const $ = (s, root = document) => root.querySelector(s);
@@ -428,7 +428,7 @@ async function importExcel(file) {
   toast('Leyendo el Excel…', 15000);
   let rows;
   try {
-    const { readWorkbook, scriptsFromWorkbook } = await import('./xlsx.js?v=1.7');
+    const { readWorkbook, scriptsFromWorkbook } = await import('./xlsx.js?v=1.8');
     rows = scriptsFromWorkbook(await readWorkbook(file));
   } catch (e) {
     toast('No pude leer el Excel: ' + e.message, 6000);
@@ -540,7 +540,7 @@ const P = {
   y: 0, targetY: null, pos: -1, painted: -1, words: [], els: [],
   voice: null, stream: null, hasAudio: false, recorder: null,
   touching: false, fingerDown: false, manualTimer: 0,
-  rate: 0, lastMoveAt: 0, heardAny: false, watchdog: 0,
+  heardAny: false, watchdog: 0,
   raf: 0, last: 0, wake: null, cdTimer: 0, recTimer: 0, recStart: 0,
   errAt: {},
 };
@@ -624,22 +624,7 @@ function targetFor(pos) {
   return idx >= 0 ? Math.max(0, P.els[idx].offsetTop - readPx()) : 0;
 }
 
-// Ritmo de lectura (palabras/seg) estimado a partir de los avances de la voz.
-function trackRate(pos) {
-  const now = performance.now();
-  const dw = pos - P.pos;
-  const dt = (now - P.lastMoveAt) / 1000;
-  if (dw > 0 && dw <= 8 && dt > 0.05 && dt < 3) {
-    const inst = Math.min(4.5, Math.max(1, dw / dt));
-    P.rate = P.rate ? P.rate * 0.7 + inst * 0.3 : inst;
-  } else if (dw < 0 || dw > 8) {
-    P.rate = 0;
-  }
-  P.lastMoveAt = now;
-}
-
 function setPos(pos, fromUser = false) {
-  if (fromUser) { P.rate = 0; P.lastMoveAt = 0; } else trackRate(pos);
   P.pos = pos;
   paint(pos);
   P.targetY = targetFor(pos);
@@ -659,14 +644,8 @@ function tick(t) {
       P.y = Math.min(max, P.y + settings.speed * settings.fontSize * 0.12 * dt);
       sc.scrollTop = P.y;
     } else if (P.mode === 'voice' && P.targetY != null) {
-      // El reconocimiento llega con ~0,5 s de demora: si venís leyendo a ritmo, el texto
-      // se adelanta 1 palabra. No más: en una pausa no debe irse a la línea siguiente.
-      let target = P.targetY;
-      if (P.playing && P.rate && P.lastMoveAt) {
-        const ahead = Math.min(1, Math.round(P.rate * Math.min(0.6, (t - P.lastMoveAt) / 1000)));
-        if (ahead > 0) target = targetFor(P.pos + ahead);
-      }
-      const d = target - P.y;
+      // Solo se mueve hacia palabras reconocidas del guion (nada de adelantarse por tiempo).
+      const d = P.targetY - P.y;
       if (Math.abs(d) > 0.5) {
         P.y += d * (1 - Math.exp(-dt * 9));
         sc.scrollTop = P.y;
@@ -804,7 +783,6 @@ function restart() {
   paint(-1);
   P.y = 0;
   P.targetY = 0;
-  P.rate = 0;
   scroller().scrollTop = 0;
   if (P.voice) { P.voice.pos = -1; P.voice.resetSession(); }
 }

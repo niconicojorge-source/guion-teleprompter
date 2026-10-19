@@ -31,13 +31,18 @@ function lev(a, b) {
   return prev[b.length];
 }
 
-// `partial`: la última palabra de un resultado provisional puede estar a medio decir.
+// ¿La palabra dicha es esta palabra del guion? Estricto a propósito: las palabras cortas
+// tienen que ser idénticas ("esto" no es "este"); en las largas se tolera un error del
+// reconocimiento. `partial`: la última palabra de un resultado provisional puede estar a
+// medio decir.
 export function similar(spoken, word, partial = false) {
+  if (!spoken || !word) return false;
   if (spoken === word) return true;
-  if (partial && spoken.length >= 3 && word.startsWith(spoken)) return true;
+  if (spoken + 's' === word || word + 's' === spoken) return word.length >= 4;
+  if (partial && spoken.length >= 4 && word.startsWith(spoken)) return true;
   const len = Math.max(spoken.length, word.length);
-  if (len < 4) return false;
-  const tol = len >= 8 ? 2 : 1;
+  if (len < 6) return false;
+  const tol = len >= 9 ? 2 : 1;
   if (Math.abs(spoken.length - word.length) > tol) return false;
   return lev(spoken, word) <= tol;
 }
@@ -103,8 +108,7 @@ export function locate(words, spoken, pos, { back = 8, ahead = 24 } = {}) {
       let ok;
       if (global) ok = count >= 4 && score >= 3.2;
       else if (dist < 0) ok = count >= 3 && score >= 2.4 && weight(words[j]) === 1;
-      else ok = (count >= 2 && score >= 1.4)
-        || (count === 1 && weight(words[j]) === 1 && words[j].length >= 4 && dist >= 1 && dist <= 3);
+      else ok = count >= 3 && score >= 2.4;
       if (!ok) continue;
 
       const value = score
@@ -120,4 +124,44 @@ export function locate(words, spoken, pos, { back = 8, ahead = 24 } = {}) {
   if (near) return { j: near.j, global: false };
   const far = n >= 4 ? search(0, words.length - 1, true) : null;
   return far ? { j: far.j, global: true } : null;
+}
+
+/**
+ * Seguimiento palabra por palabra desde `start`: cada palabra dicha tiene que ser una de las
+ * que siguen en el guion (se toleran hasta `window - 1` palabras salteadas o no reconocidas).
+ * Lo que no está en el guion (muletillas, comentarios) no mueve nada.
+ * Las coincidencias débiles necesitan que las palabras siguientes también sigan el guion:
+ *  - palabra corta ("el", "de") justo a continuación: 1 palabra más que confirme;
+ *  - saltando 1 palabra del guion: 1 palabra más;
+ *  - saltando 2 o más: 2 palabras más.
+ * Y entre las confirmadas tiene que haber al menos una palabra con contenido.
+ * Devuelve { pos, stuck }: stuck = palabras dichas seguidas sin poder ubicarlas en el guion.
+ */
+export function follow(words, tokens, start, { partialLast = false, window = 5 } = {}) {
+  let p = start;
+  let stuck = 0;
+  const last = tokens.length - 1;
+  for (let i = 0; i < tokens.length; i++) {
+    let hit = -1;
+    for (let k = 1; k <= window && p + k < words.length; k++) {
+      if (similar(tokens[i], words[p + k], partialLast && i === last && k === 1)) { hit = p + k; break; }
+    }
+    if (hit < 0) { stuck++; continue; }
+    const skip = hit - p - 1;
+    let need = skip >= 2 ? 2 : skip === 1 ? 1 : weight(words[hit]) === 1 ? 0 : 1;
+    let content = weight(words[hit]) === 1;
+    let cur = hit;
+    for (let c = 1; c <= need; c++) {
+      if (cur >= words.length - 1) break; // fin del guion: no queda nada que confirme
+      const t = tokens[i + c];
+      const partial = partialLast && i + c === last;
+      const nxt = t == null ? -1 : similar(t, words[cur + 1], partial) ? cur + 1 : similar(t, words[cur + 2]) ? cur + 2 : -1;
+      if (nxt < 0) { need = -1; break; }
+      cur = nxt;
+      if (weight(words[cur]) === 1) content = true;
+    }
+    if (need >= 0 && content) { p = hit; stuck = 0; continue; }
+    stuck++;
+  }
+  return { pos: p, stuck };
 }

@@ -1,4 +1,4 @@
-import { tokenize, locate } from './matcher.js?v=1.7';
+import { tokenize, locate, follow } from './matcher.js?v=1.8';
 
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 export const voiceSupported = !!SR;
@@ -11,8 +11,8 @@ function note(type, data = '') {
   if (voiceLog.length > LOG_MAX) voiceLog.splice(0, voiceLog.length - LOG_MAX);
 }
 
-// Saltos que necesitan confirmarse con una segunda frase antes de aplicarse.
-const FAR_AHEAD = 12;
+// Palabras dichas seguidas sin ubicar en el guion antes de buscar dónde estás.
+const LOST_AFTER = 3;
 // Si una sesión no da señales en este tiempo, se reinicia (en iPhone a veces queda colgada).
 const STALL_MS = 6000;
 
@@ -37,6 +37,10 @@ export class VoiceFollower {
     this.pending = null;
     this.lastKey = '';
     this.lastEventAt = 0;
+    this.base = -1;   // posición desde la que se sigue palabra por palabra en esta sesión
+    this.offset = 0;  // palabras de la sesión ya consumidas antes de `base`
+    this.carry = [];  // palabras dichas antes de la pausa que todavía esperaban confirmación
+    this.trail = [];
   }
 
   start() {
@@ -45,7 +49,7 @@ export class VoiceFollower {
     this.errorStreak = 0;
     this.pending = null;
     note('start', `${this.lang} pos=${this.pos}`);
-    this.spawn();
+    this.spawn(false);
     clearInterval(this.watch);
     this.watch = setInterval(() => this.checkStalled(), 1000);
   }
@@ -65,7 +69,7 @@ export class VoiceFollower {
     this.pending = null;
     clearTimeout(this.timer);
     this.kill();
-    this.timer = setTimeout(() => this.spawn(), 60);
+    this.timer = setTimeout(() => this.spawn(false), 60);
   }
 
   kill() {
@@ -84,7 +88,9 @@ export class VoiceFollower {
     }
   }
 
-  spawn() {
+  // keepTrail: al reabrir tras una pausa, las últimas palabras sin confirmar de la sesión
+  // anterior se siguen teniendo en cuenta (no tras un salto manual ni al arrancar).
+  spawn(keepTrail = true) {
     if (!this.active) return;
     const id = ++this.session;
     let r;
@@ -123,7 +129,10 @@ export class VoiceFollower {
     };
     this.rec = r;
     this.lastKey = '';
-    this.sessionStartPos = this.pos;
+    this.base = this.pos;
+    this.offset = 0;
+    if (!keepTrail) this.trail = [];
+    this.carry = this.trail;
     this.lastEventAt = performance.now();
     try {
       r.start();
@@ -135,9 +144,9 @@ export class VoiceFollower {
     }
   }
 
-  // Últimas palabras escuchadas en esta sesión. iOS a veces manda resultados acumulados
+  // Palabras escuchadas en esta sesión. iOS a veces manda resultados acumulados
   // ("hola", "hola che", "hola che cómo"): si uno contiene al anterior, el anterior se descarta.
-  static tail(results, max = 8) {
+  static tokens(results) {
     const segs = [];
     for (let i = 0; i < results.length; i++) {
       const toks = tokenize(results[i][0].transcript);
@@ -146,7 +155,7 @@ export class VoiceFollower {
       if (prev && toks.join(' ').startsWith(prev.join(' '))) segs[segs.length - 1] = toks;
       else segs.push(toks);
     }
-    return segs.flat().slice(-max);
+    return segs.flat();
   }
 
   handle(e) {
@@ -154,40 +163,59 @@ export class VoiceFollower {
     if (!res?.length) return;
     const lastRes = res[res.length - 1];
     const lastText = lastRes[0].transcript;
-    let tail = VoiceFollower.tail(res);
-    // Al principio de cada sesión (después de una pausa) hay pocas palabras para comparar:
-    // sumamos como contexto las 3 palabras leídas justo antes de que empezara la sesión.
-    // (Fijas al inicio de la sesión: si se tomaran de la posición actual, una palabra recién
-    // dicha contaría dos veces y el texto se adelantaría solo.)
-    const start = this.sessionStartPos;
-    if (tail.length < 4 && start >= 0) {
-      tail = this.words.slice(Math.max(0, start - 2), start + 1).concat(tail);
-    }
+    const tokens = VoiceFollower.tokens(res);
     this.onHeard?.(lastText);
 
-    const key = tail.join(' ');
+    const key = tokens.join(' ') + (lastRes.isFinal ? ' ·' : '');
     if (key === this.lastKey) return; // repetición de lo mismo (iOS reenvía el resultado final)
     this.lastKey = key;
     note(lastRes.isFinal ? 'final' : 'heard', `"${lastText.trim().slice(-50)}"`);
-    if (this.paused || !tail.length) return;
 
-    const m = locate(this.words, tail, this.pos);
-    if (!m) return;
-    const dist = m.j - this.pos;
-    if (dist === 0) { this.pending = null; return; }
+    // En pausa (cuenta regresiva) lo que digas no cuenta: se sigue desde acá al arrancar.
+    if (this.paused) { this.base = this.pos; this.offset = tokens.length; this.carry = []; return; }
 
-    // Un salto hacia atrás, muy adelante o a otra parte del guion solo se aplica si
-    // la frase siguiente lo confirma. Así una coincidencia suelta no te manda a otro lado.
-    if (m.global || dist < 0 || dist > FAR_AHEAD) {
-      if (this.pending === null || Math.abs(this.pending - m.j) > 3) {
-        this.pending = m.j;
-        note('salto en espera', `${this.pos}→${m.j}${m.global ? ' (global)' : ''}`);
+    // 1) Seguimiento normal: solo avanza con palabras que son las que siguen en el guion.
+    const fresh = this.carry.concat(tokens.slice(this.offset));
+    if (!fresh.length) return;
+    const r = follow(this.words, fresh, this.base, { partialLast: !lastRes.isFinal });
+    this.trail = r.stuck ? fresh.slice(-Math.min(r.stuck, 6)) : [];
+    if (r.pos > this.pos) {
+      if (this.pending) note('salto descartado', `→${this.pending.j}`);
+      this.pending = null;
+      this.moveTo(r.pos, 'sigue');
+      return;
+    }
+    // Hay un salto en espera: se confirma solo si después seguiste leyendo desde ese lugar
+    // (2 palabras más del guion a partir de ahí). Si no, se descarta.
+    if (this.pending) {
+      const after = tokens.slice(this.pending.offset);
+      const c = follow(this.words, after, this.pending.j, { partialLast: !lastRes.isFinal });
+      if (c.pos >= this.pending.j + 2) {
+        this.base = this.pending.j;
+        this.offset = this.pending.offset;
+        this.carry = [];
+        this.pending = null;
+        this.moveTo(c.pos, 'reubicado');
         return;
       }
+      if (after.length < 8) return;
+      note('salto descartado', `→${this.pending.j}`);
+      this.pending = null;
     }
-    this.pending = null;
-    note('move', `${this.pos}→${m.j}`);
-    this.pos = m.j;
-    this.onMove?.(m.j);
+    if (r.stuck < LOST_AFTER) return;
+
+    // Varias palabras seguidas sin ubicar: puede ser charla fuera del guion (no se mueve)
+    // o que saltaste a otra parte. Se propone un lugar solo si al menos 3 palabras dichas
+    // coinciden en orden con otra parte del guion.
+    const m = locate(this.words, tokens.slice(-8), this.pos);
+    if (!m || m.j === this.pos) return;
+    this.pending = { j: m.j, offset: tokens.length };
+    note('salto en espera', `${this.pos}→${m.j}${m.global ? ' (global)' : ''}`);
+  }
+
+  moveTo(p, why) {
+    note('move', `${this.pos}→${p} ${why}`);
+    this.pos = p;
+    this.onMove?.(p);
   }
 }
