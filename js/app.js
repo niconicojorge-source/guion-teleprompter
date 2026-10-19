@@ -3,7 +3,7 @@ import { norm } from './matcher.js';
 import { VoiceFollower, voiceSupported } from './voice.js';
 import { openCamera, Recorder, pickMime } from './camera.js';
 
-const VERSION = '1.1';
+const VERSION = '1.2';
 
 // ---------- Utilidades ----------
 const $ = (s, root = document) => root.querySelector(s);
@@ -679,9 +679,9 @@ const SAFE = {
 const pct = (v) => v + '%';
 const SETTINGS_UI = [
   { section: 'Texto' },
-  { key: 'fontSize', label: 'Tamaño de letra', type: 'range', min: 14, max: 80, fmt: (v) => v + ' px' },
-  { key: 'boxWidth', label: 'Ancho del texto', type: 'range', min: 25, max: 100, fmt: pct },
-  { key: 'lines', label: 'Líneas visibles', type: 'range', min: 2, max: 15 },
+  { key: 'fontSize', label: 'Tamaño de letra', type: 'range', min: 11, max: 80, fmt: (v) => v + ' px' },
+  { key: 'boxWidth', label: 'Ancho del texto', type: 'range', min: 20, max: 100, fmt: pct },
+  { key: 'lines', label: 'Líneas visibles', type: 'range', min: 1, max: 15 },
   { key: 'readPos', label: 'Línea de lectura', type: 'range', min: 0, max: 70, fmt: pct },
   { key: 'margin', label: 'Márgenes', type: 'range', min: 0, max: 60, fmt: (v) => v + ' px' },
   { key: 'boxOpacity', label: 'Fondo del texto', type: 'range', min: 0, max: 100, fmt: pct },
@@ -781,6 +781,7 @@ function applySettings() {
   $('#frame').classList.toggle('selfie', settings.mirrorPreview);
   $('#face').hidden = !settings.faceGuide;
   renderSafe();
+  relayout();
   requestAnimationFrame(relayout);
 }
 

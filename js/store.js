@@ -47,7 +47,7 @@ function guessLang() {
 
 // Cambia cuando cambia el diseño del área de texto: los ajustes de tamaño/posición
 // guardados con un diseño anterior se reemplazan por los nuevos valores por defecto.
-const LAYOUT_VERSION = 2;
+const LAYOUT_VERSION = 3;
 export const LAYOUT_KEYS = ['fontSize', 'boxWidth', 'lines', 'readPos', 'margin', 'boxOpacity'];
 
 export function defaultSettings() {
@@ -55,12 +55,13 @@ export function defaultSettings() {
   return {
     layoutVersion: LAYOUT_VERSION,
     mode: 'voice',
-    fontSize: wide ? 30 : 21,
+    fontSize: wide ? 26 : 16,
     speed: 5,
-    boxWidth: wide ? 55 : 50,
-    lines: 5,
-    readPos: 28,
-    margin: 12,
+    // En el iPhone, el ancho de la isla de la cámara es ~1/3 de la pantalla.
+    boxWidth: wide ? 40 : 36,
+    lines: 3,
+    readPos: 30,
+    margin: 8,
     boxOpacity: 60,
     mirrorText: false,
     camera: true,
