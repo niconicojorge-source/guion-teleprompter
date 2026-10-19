@@ -1,10 +1,10 @@
 // El ?v= de cada import hace que una versión nunca se mezcle con archivos viejos en caché.
-import { loadScripts, saveScripts, loadSettings, saveSettings, defaultSettings, LAYOUT_KEYS, uid } from './store.js?v=1.6';
-import { norm } from './matcher.js?v=1.6';
-import { VoiceFollower, voiceSupported, voiceLog } from './voice.js?v=1.6';
-import { openCamera, Recorder, pickMime } from './camera.js?v=1.6';
+import { loadScripts, saveScripts, loadSettings, saveSettings, defaultSettings, LAYOUT_KEYS, uid } from './store.js?v=1.7';
+import { norm } from './matcher.js?v=1.7';
+import { VoiceFollower, voiceSupported, voiceLog } from './voice.js?v=1.7';
+import { openCamera, Recorder, pickMime } from './camera.js?v=1.7';
 
-const VERSION = '1.6';
+const VERSION = '1.7';
 
 // ---------- Utilidades ----------
 const $ = (s, root = document) => root.querySelector(s);
@@ -208,7 +208,7 @@ function renderLibrary() {
   $('#lib-title').textContent = other ? 'Otros guiones'
     : niche != null ? (parts.length ? folderLabel(parts) : nicheName(niche))
       : dated.length ? 'Producción' : 'Guion';
-  renderCrumbs(q);
+  renderBack();
 
   const pool = other ? undated : niche != null ? dated.filter((s) => nicheKey(s.category) === niche) : scripts;
   const items = [];
@@ -255,23 +255,21 @@ function renderLibrary() {
     : scripts.length ? 'No hay guiones acá.' : 'Todavía no tenés guiones. Creá uno o importá tu Excel.';
 }
 
-function renderCrumbs(q) {
-  const nav = $('#crumbs');
+// Botón "‹ Atrás": vuelve al nivel anterior y muestra su nombre.
+function renderBack() {
+  const btn = $('#lib-back');
   const { niche, parts, other } = lib;
-  nav.hidden = !!q || (niche == null && !other);
-  if (nav.hidden) return;
+  btn.hidden = niche == null && !other;
+  if (btn.hidden) return;
   const trail = [['Inicio', '/']];
   if (other) trail.push(['Otros guiones', null]);
   else {
     trail.push([nicheName(niche), nicheBase(niche)]);
     parts.forEach((_, i) => trail.push([crumbLabel(parts.slice(0, i + 1)), `${nicheBase(niche)}/${parts.slice(0, i + 1).join('/')}`]));
   }
-  const out = [];
-  trail.forEach(([label, path], i) => {
-    if (i) out.push(h('span', { class: 'sep' }, '›'));
-    out.push(i === trail.length - 1 ? h('span', { class: 'here' }, label) : h('button', { onclick: () => go(path) }, label));
-  });
-  nav.replaceChildren(...out);
+  const [label, path] = trail[trail.length - 2];
+  btn.textContent = '‹ ' + label;
+  btn.onclick = () => { $('#search').value = ''; go(path); };
 }
 
 function progress(list) {
@@ -430,7 +428,7 @@ async function importExcel(file) {
   toast('Leyendo el Excel…', 15000);
   let rows;
   try {
-    const { readWorkbook, scriptsFromWorkbook } = await import('./xlsx.js?v=1.6');
+    const { readWorkbook, scriptsFromWorkbook } = await import('./xlsx.js?v=1.7');
     rows = scriptsFromWorkbook(await readWorkbook(file));
   } catch (e) {
     toast('No pude leer el Excel: ' + e.message, 6000);

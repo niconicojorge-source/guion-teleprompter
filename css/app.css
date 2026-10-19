@@ -326,3 +326,5 @@ button.cal-day.all { background: rgba(48, 209, 88, 0.12); border-color: rgba(48,
 .cal-day .dots i { width: 6px; height: 6px; }
 .cal-sum { margin: 12px 4px 0; font-size: 13px; color: var(--muted); text-align: center; }
 .cal-sum.all { color: var(--ok); }
+.lib-back { display: block; margin: 0 0 -4px -2px; padding: 6px 2px; font-size: 17px; }
+.lib-back + .lib-header { margin-top: 0; }
