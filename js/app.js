@@ -1,10 +1,10 @@
 // El ?v= de cada import hace que una versión nunca se mezcle con archivos viejos en caché.
-import { loadScripts, saveScripts, loadSettings, saveSettings, defaultSettings, LAYOUT_KEYS, uid } from './store.js?v=1.3';
-import { norm } from './matcher.js?v=1.3';
-import { VoiceFollower, voiceSupported } from './voice.js?v=1.3';
-import { openCamera, Recorder, pickMime } from './camera.js?v=1.3';
+import { loadScripts, saveScripts, loadSettings, saveSettings, defaultSettings, LAYOUT_KEYS, uid } from './store.js?v=1.4';
+import { norm } from './matcher.js?v=1.4';
+import { VoiceFollower, voiceSupported, voiceLog } from './voice.js?v=1.4';
+import { openCamera, Recorder, pickMime } from './camera.js?v=1.4';
 
-const VERSION = '1.3';
+const VERSION = '1.4';
 
 // ---------- Utilidades ----------
 const $ = (s, root = document) => root.querySelector(s);
@@ -396,11 +396,11 @@ function tick(t) {
       P.y = Math.min(max, P.y + settings.speed * settings.fontSize * 0.12 * dt);
       sc.scrollTop = P.y;
     } else if (P.mode === 'voice' && P.targetY != null) {
-      // El reconocimiento llega con ~0,5 s de demora: si venís leyendo a ritmo,
-      // el texto se adelanta hasta 2 palabras para no quedar atrás.
+      // El reconocimiento llega con ~0,5 s de demora: si venís leyendo a ritmo, el texto
+      // se adelanta 1 palabra. No más: en una pausa no debe irse a la línea siguiente.
       let target = P.targetY;
       if (P.playing && P.rate && P.lastMoveAt) {
-        const ahead = Math.min(2, Math.round(P.rate * Math.min(0.6, (t - P.lastMoveAt) / 1000)));
+        const ahead = Math.min(1, Math.round(P.rate * Math.min(0.6, (t - P.lastMoveAt) / 1000)));
         if (ahead > 0) target = targetFor(P.pos + ahead);
       }
       const d = target - P.y;
@@ -708,7 +708,7 @@ const SETTINGS_UI = [
   { key: 'boxOpacity', label: 'Fondo del texto', type: 'range', min: 0, max: 100, fmt: pct },
   { key: 'speed', label: 'Velocidad (modo Auto)', type: 'range', min: 1, max: 20 },
   { key: 'mirrorText', label: 'Espejar texto (para vidrio)', type: 'switch' },
-  { action: 'Restaurar tamaño y posición', run: resetLayout },
+  { action: 'Restaurar tamaño y posición', run: resetLayout, reopen: true },
   { section: 'Cámara' },
   { key: 'camera', label: 'Mostrar cámara', type: 'switch' },
   { key: 'mirrorPreview', label: 'Vista previa en espejo', type: 'switch' },
@@ -721,6 +721,7 @@ const SETTINGS_UI = [
     options: [['es-AR', 'Español (Argentina)'], ['es-ES', 'Español (España)'], ['es-MX', 'Español (México)'], ['es-US', 'Español (EE. UU.)'], ['en-US', 'English (US)'], ['pt-BR', 'Português (Brasil)']],
   },
   { key: 'showHeard', label: 'Mostrar lo que escucho', type: 'switch' },
+  { action: 'Copiar registro de voz (para diagnóstico)', run: copyVoiceLog },
 ];
 
 function settingRow(f) {
@@ -769,11 +770,26 @@ function openSettings() {
     sh.append(h('h2', {}, 'Ajustes'));
     for (const f of SETTINGS_UI) {
       if (f.section) sh.append(h('h3', { class: 'sec' }, f.section));
-      else if (f.action) sh.append(h('button', { class: 'link-btn', onclick: () => { f.run(); close(); openSettings(); } }, f.action));
+      else if (f.action) sh.append(h('button', { class: 'link-btn', onclick: () => { f.run(); if (f.reopen) { close(); openSettings(); } } }, f.action));
       else sh.append(settingRow(f));
     }
     sh.append(h('p', { class: 'info' }, infoText()));
   }, { clear: true });
+}
+
+function copyVoiceLog() {
+  const s = getScript(P.id);
+  const text = [
+    `Guion v${VERSION} · ${navigator.userAgent}`,
+    `Modo: ${P.mode} · Idioma: ${settings.lang} · Palabras del guion: ${P.words.length} · Posición: ${P.pos}`,
+    `Guion: ${s?.title || '—'}`,
+    '',
+    ...(voiceLog.length ? voiceLog : ['(vacío: usá el modo Voz y volvé a intentar)']),
+  ].join('\n');
+  const fallback = () => shareOrDownload(new Blob([text], { type: 'text/plain' }), 'registro-voz.txt', 'Registro de voz');
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).then(() => toast('Registro copiado. Pegalo en el chat.'), fallback);
+  } else fallback();
 }
 
 function resetLayout() {

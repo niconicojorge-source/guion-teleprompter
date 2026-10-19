@@ -73,13 +73,14 @@ function lcs(spoken, sStart, sEnd, words, wStart, wEnd) {
 }
 
 /**
- * Devuelve el índice de la última palabra del guion que se dijo, o null si no hay
- * una coincidencia confiable.
+ * Devuelve { j, global }: j es el índice de la última palabra del guion que se dijo y
+ * global indica que se encontró buscando en todo el guion (no cerca de la posición).
+ * Devuelve null si no hay una coincidencia confiable.
  * @param {string[]} words  palabras normalizadas del guion
  * @param {string[]} spoken últimas palabras escuchadas (normalizadas)
  * @param {number} pos      posición actual (-1 = antes de empezar)
  */
-export function locate(words, spoken, pos, { back = 8, ahead = 30 } = {}) {
+export function locate(words, spoken, pos, { back = 8, ahead = 24 } = {}) {
   const n = spoken.length;
   if (!n || !words.length) return null;
 
@@ -115,7 +116,8 @@ export function locate(words, spoken, pos, { back = 8, ahead = 30 } = {}) {
     return best;
   };
 
-  let best = search(Math.max(0, pos - back), Math.min(words.length - 1, pos + ahead), false);
-  if (!best && n >= 4) best = search(0, words.length - 1, true);
-  return best ? best.j : null;
+  const near = search(Math.max(0, pos - back), Math.min(words.length - 1, pos + ahead), false);
+  if (near) return { j: near.j, global: false };
+  const far = n >= 4 ? search(0, words.length - 1, true) : null;
+  return far ? { j: far.j, global: true } : null;
 }
