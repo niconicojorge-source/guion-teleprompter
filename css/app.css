@@ -366,3 +366,14 @@ button.cal-day.empty b { color: #6c6c7a; }
 .spread[hidden] { display: none; }
 .spread p.msg { font-size: 14px; }
 .spread label { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 14px; color: #cfcfd6; }
+.layout-pick { margin: 14px 0 0; }
+.layout-pick .pick-q { margin: 0 0 8px; font-size: 15px; font-weight: 600; color: var(--text); }
+.layout-opts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.layout-opt { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left; padding: 12px; border-radius: 14px; background: var(--surface); border: 1.5px solid var(--line); color: var(--text); font: inherit; cursor: pointer; }
+.layout-opt strong { font-size: 15px; }
+.layout-opt span:last-child { font-size: 12.5px; color: var(--muted); line-height: 1.35; }
+.layout-opt .lo-ic { width: 26px; height: 26px; color: var(--muted); }
+.layout-opt .lo-ic svg { width: 100%; height: 100%; }
+.layout-opt[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
+.layout-opt[aria-pressed="true"] .lo-ic { color: var(--accent); }
+.card h3 .n { color: var(--accent); margin-right: 6px; font-variant-numeric: tabular-nums; }

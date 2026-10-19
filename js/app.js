@@ -1,11 +1,11 @@
 // El ?v= de cada import hace que una versión nunca se mezcle con archivos viejos en caché.
-import { loadScripts, saveScripts, loadSettings, saveSettings, loadNiches, saveNiches, defaultSettings, LAYOUT_KEYS, uid } from './store.js?v=2.4';
-import { norm } from './matcher.js?v=2.4';
-import { VoiceFollower, voiceSupported, voiceLog, logVoice } from './voice.js?v=2.4';
-import { openCamera, Recorder, pickMime } from './camera.js?v=2.4';
-import { AudioBridge } from './audio.js?v=2.4';
+import { loadScripts, saveScripts, loadSettings, saveSettings, loadNiches, saveNiches, defaultSettings, LAYOUT_KEYS, uid } from './store.js?v=2.5';
+import { norm } from './matcher.js?v=2.5';
+import { VoiceFollower, voiceSupported, voiceLog, logVoice } from './voice.js?v=2.5';
+import { openCamera, Recorder, pickMime } from './camera.js?v=2.5';
+import { AudioBridge } from './audio.js?v=2.5';
 
-const VERSION = '2.4';
+const VERSION = '2.5';
 
 // ---------- Utilidades ----------
 const $ = (s, root = document) => root.querySelector(s);
@@ -34,6 +34,8 @@ const ICONS = {
   import: svg('<path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 20h14"/>'),
   chevron: svg('<path d="M9.5 6l6 6-6 6"/>'),
   back: svg('<path d="M14.5 6l-6 6 6 6"/>', 'stroke-width="2.6"'),
+  calendar: svg('<rect x="4" y="5" width="16" height="15" rx="2.5"/><path d="M4 10h16M8.5 3v4M15.5 3v4"/>'),
+  list: svg('<path d="M9 6.5h11M9 12h11M9 17.5h11"/><circle cx="4.8" cy="6.5" r="1" fill="currentColor"/><circle cx="4.8" cy="12" r="1" fill="currentColor"/><circle cx="4.8" cy="17.5" r="1" fill="currentColor"/>'),
 };
 
 const fold = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -131,7 +133,7 @@ function download(blob, name) {
 function go(path) { location.hash = path; }
 
 // A dónde vuelve un guion al cerrarlo: el día de su nicho, o "Otros guiones" si no tiene fecha.
-const homeOf = (s) => (s?.date ? `${nicheBase(nicheKey(s.category))}/${s.date.split('-').join('/')}` : scripts.some((x) => x.date) ? '/o' : '/');
+const homeOf = (s) => (inList(s) ? nicheBase(nicheKey(s.category)) : s?.date ? `${nicheBase(nicheKey(s.category))}/${s.date.split('-').join('/')}` : scripts.some((x) => x.date) ? '/o' : '/');
 
 function route() {
   const [, view, ...rest] = (location.hash.slice(1) || '/').split('/');
@@ -181,6 +183,11 @@ function syncNiches() {
 }
 const nicheOf = (key) => niches.find((n) => n.name === key);
 const perDay = (key) => nicheOf(key)?.perDay || 3;
+// Cada nicho se organiza como calendario (año, mes, día) o como lista (uno después del otro).
+const isList = (key) => nicheOf(key)?.layout === 'list';
+const inList = (s) => !!s && isList(nicheKey(s.category));
+const byOrder = (a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || byDate(a, b) || a.createdAt - b.createdAt;
+const listOf = (key) => scripts.filter((s) => nicheKey(s.category) === key).sort(byOrder);
 
 function todayISO() {
   const d = new Date();
@@ -220,13 +227,14 @@ function renderLibrary() {
   const q = fold($('#search').value.trim());
   const { niche, parts, other } = lib;
   const dated = scripts.filter((s) => s.date);
-  const undated = scripts.filter((s) => !s.date).sort((a, b) => b.updatedAt - a.updatedAt);
+  const undated = scripts.filter((s) => !s.date && !inList(s)).sort((a, b) => b.updatedAt - a.updatedAt);
+  const listMode = niche != null && !other && isList(niche);
 
   $('#lib-title').textContent = other ? 'Otros guiones'
     : niche != null ? (parts.length ? folderLabel(parts) : nicheName(niche)) : 'Producción';
   renderBack();
 
-  const pool = other ? undated : niche != null ? dated.filter((s) => nicheKey(s.category) === niche) : scripts;
+  const pool = other ? undated : listMode ? listOf(niche) : niche != null ? dated.filter((s) => nicheKey(s.category) === niche) : scripts;
   const items = [];
 
   if (q) {
@@ -237,11 +245,20 @@ function renderLibrary() {
   } else if (niche == null) {
     // Inicio: un panel por nicho, en el orden en que se crearon o importaron.
     items.push(h('li', { class: 'group' }, 'Elegí el nicho'));
-    const byNiche = groupBy(dated, (s) => nicheKey(s.category));
+    const byNiche = groupBy(scripts.filter((s) => s.date || inList(s)), (s) => nicheKey(s.category));
     for (const n of niches) items.push(nicheTile(n.name, byNiche.get(n.name) || []));
     if (byNiche.has('_')) items.push(nicheTile('_', byNiche.get('_')));
     items.push(addNicheTile());
     if (undated.length) items.push(nicheTile(null, undated));
+  } else if (listMode) {
+    // Lista: todos los guiones del nicho, uno después del otro y numerados.
+    items.push(nicheToolbar(niche));
+    if (!pool.length) items.push(h('li', { class: 'hint' }, 'Este nicho todavía no tiene guiones. Importá un archivo con el botón de arriba, o tocá "+ Nuevo guion".'));
+    else {
+      const p = progress(pool);
+      items.push(h('li', { class: 'group' }, `${pool.length} guiones · ${p.done} hechos`));
+    }
+    pool.forEach((s, i) => items.push(card(s, true, i + 1)));
   } else {
     const base = nicheBase(niche);
     const [y, m, d] = parts;
@@ -318,12 +335,12 @@ function addNicheTile() {
     h('button', { onclick: addNiche },
       h('span', { class: 'n-main' },
         h('span', { class: 'n-name' }, '+ Agregar nicho'),
-        h('span', { class: 'n-sub' }, 'Mismo calendario: año, mes, día y 3 videos por día'))));
+        h('span', { class: 'n-sub' }, 'Como calendario (año, mes y día) o como lista, uno después del otro'))));
 }
 
 function nicheToolbar(key) {
   return h('li', { class: 'toolbar' },
-    h('button', { class: 'tool-btn', onclick: () => pickExcel(key) }, h('span', { class: 'ic', html: ICONS.import }), 'Importar Excel'),
+    h('button', { class: 'tool-btn', onclick: () => pickExcel(key) }, h('span', { class: 'ic', html: ICONS.import }), 'Importar archivo'),
     h('button', { class: 'tool-btn', onclick: () => nicheMenu(key) }, h('span', { class: 'ic', html: ICONS.more }), 'Opciones'));
 }
 
@@ -394,13 +411,76 @@ function promptSheet({ title, value = '', placeholder = '', ok = 'Aceptar', type
 
 const nicheExists = (name, except = null) => niches.some((n) => n.name !== except && fold(n.name) === fold(name));
 
-async function addNiche() {
-  const name = await promptSheet({ title: 'Nuevo nicho', placeholder: 'Ej.: Finanzas personales', ok: 'Crear nicho' });
-  if (!name) return;
-  if (nicheExists(name) || name === '_') { toast('Ya existe un nicho con ese nombre.'); return; }
-  niches.push({ name, perDay: 3 });
+// "¿Cómo lo querés organizar?": calendario o lista. Devuelve el elemento y la elección actual.
+function layoutPicker(initial, onChange = () => {}) {
+  let value = initial;
+  const opts = [
+    ['calendar', 'Calendario', 'Por año, mes y día, con videos por día'],
+    ['list', 'Lista', 'Todos, uno después del otro'],
+  ];
+  const btns = opts.map(([v, title, sub]) => h('button', {
+    type: 'button', class: 'layout-opt', 'aria-pressed': String(v === value),
+    onclick: () => { value = v; btns.forEach((b, i) => b.setAttribute('aria-pressed', String(opts[i][0] === v))); onChange(v); },
+  }, h('span', { class: 'lo-ic', html: v === 'list' ? ICONS.list : ICONS.calendar }), h('strong', {}, title), h('span', {}, sub)));
+  return { el: h('div', { class: 'layout-pick' }, h('p', { class: 'pick-q' }, '¿Cómo lo querés organizar?'), h('div', { class: 'layout-opts' }, btns)), get value() { return value; } };
+}
+
+function addNiche() {
+  sheet((sh, close) => {
+    const input = h('input', { class: 'prompt-input', placeholder: 'Ej.: Finanzas personales', autocomplete: 'off' });
+    const pick = layoutPicker('calendar');
+    const submit = () => {
+      const name = input.value.trim();
+      if (!name) { input.focus(); return; }
+      if (nicheExists(name) || name === '_') { toast('Ya existe un nicho con ese nombre.'); return; }
+      close();
+      niches.push({ name, perDay: 3, layout: pick.value });
+      saveNiches(niches);
+      go(nicheBase(name));
+    };
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+    sh.append(h('h2', {}, 'Nuevo nicho'), input, pick.el,
+      h('div', { class: 'sheet-actions' },
+        h('button', { class: 'btn primary', onclick: submit }, 'Crear nicho'),
+        h('button', { class: 'btn', onclick: () => close() }, 'Cancelar')));
+    setTimeout(() => input.focus(), 60);
+  });
+}
+
+// Pasa un nicho a calendario o a lista. Al pasar a calendario, los guiones sin fecha se
+// acomodan desde hoy, N por día, en el orden de la lista.
+async function setLayout(key, layout) {
+  const n = nicheOf(key);
+  if (!n || (n.layout || 'calendar') === layout) return;
+  if (layout === 'calendar') {
+    const list = listOf(key);
+    const undated = list.filter((s) => !s.date);
+    if (undated.length) {
+      const ok = await confirmSheet(`${undated.length} guiones no tienen fecha. Los acomodo en el calendario desde hoy, ${perDay(key)} por día, en el orden de la lista.`, 'Acomodar');
+      if (!ok) return;
+      const used = groupBy(list.filter((s) => s.date), (s) => s.date);
+      let iso = todayISO();
+      for (const s of undated) {
+        while ((used.get(iso)?.length || 0) >= perDay(key)) iso = nextDay(iso);
+        s.date = iso;
+        if (!used.has(iso)) used.set(iso, []);
+        used.get(iso).push(s);
+      }
+    }
+  } else {
+    listOf(key).forEach((s, i) => { s.order = i; });
+  }
+  n.layout = layout;
+  persist();
   saveNiches(niches);
-  go(nicheBase(name));
+  go(nicheBase(key));
+  renderLibrary();
+}
+
+function nextDay(iso) {
+  const d = new Date(iso + 'T12:00');
+  d.setDate(d.getDate() + 1);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 function nicheMenu(key) {
@@ -408,8 +488,11 @@ function nicheMenu(key) {
   if (!n) return;
   const count = scripts.filter((s) => (s.category || '').trim() === key).length;
   actionSheet(key, [
-    { label: 'Importar Excel a este nicho', run: () => pickExcel(key) },
-    {
+    { label: 'Importar archivo a este nicho', run: () => pickExcel(key) },
+    isList(key)
+      ? { label: 'Organizar como calendario', run: () => setLayout(key, 'calendar') }
+      : { label: 'Organizar como lista (uno después del otro)', run: () => setLayout(key, 'list') },
+    !isList(key) && {
       label: `Videos por día: ${perDay(key)}`,
       run: async () => {
         const v = parseInt(await promptSheet({ title: 'Videos por día', value: String(perDay(key)), type: 'number', ok: 'Guardar' }), 10);
@@ -445,7 +528,7 @@ function nicheMenu(key) {
         go('/');
       },
     },
-  ]);
+  ].filter(Boolean));
 }
 
 function setDone(s, value) {
@@ -461,14 +544,14 @@ function statusBtn(s, after = renderLibrary) {
   }, h('i'));
 }
 
-function card(s, showDate = false) {
+function card(s, showDate = false, num = 0) {
   const w = countWords(s.text);
   const hook = s.details?.find(([k]) => k.startsWith('Gancho'))?.[1];
   const meta = [showDate && s.date ? dayLabel(s.date, true) : null, s.time, s.code, s.category, fmtDuration(w)];
   return h('li', { class: 'card' + (s.done ? ' done' : '') },
     statusBtn(s),
     h('button', { class: 'card-main', onclick: () => go('/edit/' + s.id) },
-      h('h3', {}, s.title || 'Sin título'),
+      h('h3', {}, num ? h('span', { class: 'n' }, num + '.') : null, s.title || 'Sin título'),
       h('p', {}, hook || s.text.trim().slice(0, 180) || 'Vacío'),
       h('span', { class: 'meta' }, meta.filter(Boolean).join(' · '))),
     h('button', { class: 'card-act play', 'aria-label': 'Leer', html: ICONS.play, onclick: () => readScript(s.id) }),
@@ -484,8 +567,12 @@ function readScript(id) {
 function scriptMenu(id, fromEditor = false) {
   const s = getScript(id);
   if (!s) return;
+  const list = !fromEditor && inList(s) ? listOf(nicheKey(s.category)) : null;
+  const at = list ? list.indexOf(s) : -1;
   actionSheet(s.title || 'Sin título', [
     { label: 'Leer en el teleprompter', run: () => readScript(id) },
+    ...(list && at > 0 ? [{ label: 'Subir un lugar', run: () => moveInList(s, -1) }] : []),
+    ...(list && at < list.length - 1 ? [{ label: 'Bajar un lugar', run: () => moveInList(s, 1) }] : []),
     { label: s.done ? 'Marcar como pendiente' : 'Marcar como hecho', run: () => { setDone(s, !s.done); if (fromEditor) edStatus(); else renderLibrary(); } },
     {
       label: 'Duplicar',
@@ -521,8 +608,25 @@ function createScript(fields) {
 
 // "+ Nuevo guion": en un día, para ese día; dentro de un nicho, para hoy; si no, sin fecha.
 function newScript() {
+  if (lib.niche != null && !lib.other && isList(lib.niche)) {
+    const list = listOf(lib.niche);
+    createScript({ category: currentNiche(), date: '', order: list.length ? (list[list.length - 1].order ?? list.length) + 1 : 0 });
+    return;
+  }
   const date = lib.parts.length === 3 ? lib.parts.join('-') : lib.niche != null ? todayISO() : '';
   createScript({ category: currentNiche(), date });
+}
+
+// En un nicho en lista: subir o bajar un guion un lugar.
+function moveInList(s, delta) {
+  const list = listOf(nicheKey(s.category));
+  list.forEach((x, i) => { x.order = i; });
+  const i = list.indexOf(s);
+  const j = i + delta;
+  if (j < 0 || j >= list.length) return;
+  [list[i].order, list[j].order] = [list[j].order, list[i].order];
+  persist();
+  renderLibrary();
 }
 
 // El botón de importar de arriba, dentro de un nicho, importa a ese nicho.
@@ -535,7 +639,7 @@ function pickExcel(target) {
 // Acepta cualquier archivo y se fija qué es por su contenido, no solo por el nombre:
 // Excel (.xlsx), CSV, Word (.docx) o texto. Lo que no se puede leer explica cómo exportarlo.
 async function importFiles(files, target = null) {
-  const xlsx = () => import('./xlsx.js?v=2.4');
+  const xlsx = () => import('./xlsx.js?v=2.5');
   let texts = 0;
   const addText = (name, text) => {
     const now = Date.now();
@@ -609,7 +713,7 @@ async function importExcel(file, target, loadSheets) {
   let rows;
   let sheetList = [];
   try {
-    const { scriptsFromWorkbook } = await import('./xlsx.js?v=2.4');
+    const { scriptsFromWorkbook } = await import('./xlsx.js?v=2.5');
     sheetList = await loadSheets();
     rows = scriptsFromWorkbook(sheetList);
   } catch (e) {
@@ -640,18 +744,22 @@ async function importExcel(file, target, loadSheets) {
       h('p', { class: 'msg' }),
       h('label', {}, 'Repartirlos desde el ', from));
     const pending = (sel, plan) => sel.filter((r) => !r.date && !plan.existing.has(plan.keyFor(r)));
+    // Por defecto: como ya está el nicho; si es nuevo, calendario si el archivo trae fechas.
+    const known = target ? nicheOf(target) : nicheOf(rows[0].line);
+    const pick = layoutPicker(known?.layout || (known && listOf(known.name).length ? 'calendar' : rows.some((r) => r.date) ? 'calendar' : 'list'), () => refresh());
     const refresh = () => {
       const sel = rows.filter((r) => chosen.has(r.sheet));
       const plan = importPlan(sel, target);
       const updates = sel.filter((r) => plan.existing.has(plan.keyFor(r))).length;
       const done = sel.filter((r) => r.done).length;
       const undated = pending(sel, plan);
-      spread.hidden = !undated.length;
+      const asList = pick.value === 'list';
+      spread.hidden = asList || !undated.length;
       spread.firstChild.textContent = `${undated.length === 1 ? '1 guion no tiene fecha' : `${undated.length} guiones no tienen fecha`}: los acomodo en el calendario, ${target ? perDay(target) : 3} por día, en el orden del archivo.`;
       go1.textContent = sel.length ? `Importar ${sel.length} guiones` : 'Elegí al menos una hoja';
       go1.disabled = !sel.length;
       info.textContent = [
-        target ? `Todo va al nicho "${target}", ordenado por año, mes y día.` : 'Cada hoja va a su nicho, ordenado por año, mes y día.',
+        (target ? `Todo va al nicho "${target}"` : 'Cada hoja va a su nicho') + (asList ? ', uno después del otro en el orden del archivo.' : ', ordenado por año, mes y día.'),
         done ? `${done} figuran como publicados y entran en verde.` : '',
         updates ? `${updates} ya estaban en la app: se actualizan y conservan su estado.` : '',
       ].filter(Boolean).join(' ');
@@ -659,11 +767,11 @@ async function importExcel(file, target, loadSheets) {
     go1.onclick = () => {
       close();
       const sel = rows.filter((r) => chosen.has(r.sheet));
-      applyImport(sel, target, from.value || todayISO());
+      applyImport(sel, target, from.value || todayISO(), pick.value);
     };
     const multi = sheets.length > 1;
     sh.append(
-      h('h2', {}, target ? `Importar a ${target}` : 'Importar Excel'),
+      h('h2', {}, target ? `Importar a ${target}` : 'Importar archivo'),
       h('p', { class: 'msg' }, `Encontré ${rows.length} guiones en "${file.name}"${multi ? '. Elegí qué hojas importar:' : ':'}`),
       h('ul', { class: 'import-sum' + (multi ? ' pick' : '') }, sheets.map((s) => {
         const text = [h('strong', {}, target ? s.name : s.line), ` · ${s.list.length} guiones${s.from ? ` · ${shortDate(s.from)} → ${shortDate(s.to)}` : ''}`];
@@ -671,6 +779,7 @@ async function importExcel(file, target, loadSheets) {
         const cb = h('input', { type: 'checkbox', checked: true, onchange: (e) => { if (e.target.checked) chosen.add(s.name); else chosen.delete(s.name); refresh(); } });
         return h('li', {}, h('label', {}, cb, h('span', {}, text)));
       })),
+      pick.el,
       spread,
       info,
       h('div', { class: 'sheet-actions' }, go1, h('button', { class: 'btn', onclick: () => close() }, 'Cancelar')));
@@ -685,11 +794,7 @@ function spreadDates(rows, lineOf, keyFor, existing, start) {
   const count = (line, iso) => used.get(`${line}|${iso}`) || 0;
   for (const s of scripts) if (s.date) used.set(`${s.category}|${s.date}`, count(s.category, s.date) + 1);
   for (const r of rows) if (r.date && !existing.has(keyFor(r))) used.set(`${lineOf(r)}|${r.date}`, count(lineOf(r), r.date) + 1);
-  const next = (iso) => {
-    const d = new Date(iso + 'T12:00');
-    d.setDate(d.getDate() + 1);
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  };
+  const next = nextDay;
   const dates = new Map();
   const day = new Map();
   for (const r of rows) {
@@ -704,20 +809,33 @@ function spreadDates(rows, lineOf, keyFor, existing, start) {
   return dates;
 }
 
-function applyImport(rows, target = null, start = todayISO()) {
+function applyImport(rows, target = null, start = todayISO(), layout = 'calendar') {
   const { lineOf, keyFor, existing } = importPlan(rows, target);
-  const auto = spreadDates(rows, lineOf, keyFor, existing, start);
+  // Cada nicho del archivo queda organizado como se eligió.
+  for (const line of new Set(rows.map(lineOf))) {
+    const n = nicheOf(line);
+    if (n) n.layout = layout;
+    else niches.push({ name: line, perDay: 3, layout });
+  }
+  saveNiches(niches);
+  const auto = layout === 'list' ? new Map() : spreadDates(rows, lineOf, keyFor, existing, start);
+  // Orden de la lista: el del archivo, después de los guiones que ya había.
+  const imported = new Set(rows.map((r) => existing.get(keyFor(r))).filter(Boolean));
+  const orderBase = new Map();
+  for (const sc of scripts) if (!imported.has(sc)) orderBase.set(nicheKey(sc.category), Math.max(orderBase.get(nicheKey(sc.category)) ?? -1, sc.order ?? -1));
+  const seen = new Map();
   const now = Date.now();
   let added = 0;
   for (const r of rows) {
     const key = keyFor(r);
     const s = existing.get(key);
     const date = r.date || s?.date || auto.get(r) || '';
-    const data = { title: r.title, category: lineOf(r), text: r.text, date, time: r.time, code: r.code, details: r.details, source: 'excel', xkey: key, updatedAt: now };
+    const line = lineOf(r);
+    seen.set(line, (seen.get(line) ?? (orderBase.get(line) ?? -1)) + 1);
+    const data = { title: r.title, category: line, text: r.text, date, time: r.time, code: r.code, order: seen.get(line), details: r.details, source: 'excel', xkey: key, updatedAt: now };
     if (s) Object.assign(s, data, { done: s.done || r.done });
     else { scripts.push({ id: uid(), createdAt: now, done: r.done, ...data }); added++; }
   }
-  if (target && !nicheOf(target)) { niches.push({ name: target, perDay: 3 }); saveNiches(niches); }
   if (!persist()) toast('No hay espacio para guardar todo en este dispositivo.', 6000);
   else toast(`Listo: ${added} guiones nuevos${rows.length - added ? ` y ${rows.length - added} actualizados` : ''}.`, 4000);
   const dest = target ? nicheBase(target) : '/';
