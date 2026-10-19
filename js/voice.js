@@ -1,4 +1,4 @@
-import { tokenize, locate, follow } from './matcher.js?v=2.0';
+import { tokenize, locate, follow } from './matcher.js?v=2.1';
 
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 export const voiceSupported = !!SR;
@@ -10,11 +10,12 @@ function note(type, data = '') {
   voiceLog.push(`${(performance.now() / 1000).toFixed(2)} ${type}${data === '' ? '' : ' ' + data}`);
   if (voiceLog.length > LOG_MAX) voiceLog.splice(0, voiceLog.length - LOG_MAX);
 }
+export const logVoice = note;
 
 // Palabras dichas seguidas sin ubicar en el guion antes de buscar dónde estás.
 const LOST_AFTER = 3;
 // Si una sesión no da señales en este tiempo, se reinicia (en iPhone a veces queda colgada).
-const STALL_MS = 6000;
+const STALL_MS = 4000;
 
 // Escucha de forma continua y avisa (onMove) cuando avanza la posición en el guion.
 // El navegador corta la sesión de reconocimiento en cada pausa larga: se reinicia sola.
@@ -41,6 +42,7 @@ export class VoiceFollower {
     this.offset = 0;  // palabras de la sesión ya consumidas antes de `base`
     this.carry = [];  // palabras dichas antes de la pausa que todavía esperaban confirmación
     this.trail = [];
+    this.gentle = false;      // grabando: no cortar sesiones de golpe
     this.flow = false;        // ¿venías leyendo el guion en orden?
     this.sessionFlow = false; // estado "en marcha" con el que arrancó esta sesión
   }
@@ -84,6 +86,14 @@ export class VoiceFollower {
   checkStalled() {
     if (!this.active || !this.rec) return;
     if (performance.now() - this.lastEventAt > STALL_MS) {
+      if (this.gentle) {
+        // Grabando: se le pide que termine (sin cortarla de golpe, que en iPhone puede apagar
+        // el micrófono de la toma); al terminar, onend abre una sesión nueva.
+        note('stalled → cierre suave');
+        this.lastEventAt = performance.now();
+        try { this.rec.stop(); } catch { /* ya estaba cerrada */ }
+        return;
+      }
       note('stalled → reinicio');
       this.kill();
       this.spawn();

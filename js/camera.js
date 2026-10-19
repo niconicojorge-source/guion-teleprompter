@@ -20,6 +20,13 @@ export async function openCamera() {
   }
 }
 
+// Micrófono nuevo (se pide antes de cada toma: en iPhone, cuando se corta el reconocimiento
+// de voz, el micrófono de la toma anterior puede quedar apagado).
+export async function openMic() {
+  const s = await navigator.mediaDevices.getUserMedia({ audio: AUDIO });
+  return s.getAudioTracks()[0];
+}
+
 const TYPES = [
   'video/mp4;codecs=avc1.640028,mp4a.40.2',
   'video/mp4;codecs=avc1,mp4a',

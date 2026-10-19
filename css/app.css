@@ -338,3 +338,4 @@ button.cal-day.all { background: rgba(48, 209, 88, 0.12); border-color: rgba(48,
 .back-ic svg { width: 20px; height: 20px; }
 .lib-back { margin: 4px 0 2px; }
 .lib-back + .lib-header { margin-top: 6px; }
+.warn { margin: 12px 0 0; padding: 10px 12px; border-radius: 12px; background: rgba(255, 69, 58, 0.14); color: #ff8a80; font-size: 14px; line-height: 1.4; }

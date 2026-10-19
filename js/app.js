@@ -1,10 +1,10 @@
 // El ?v= de cada import hace que una versión nunca se mezcle con archivos viejos en caché.
-import { loadScripts, saveScripts, loadSettings, saveSettings, defaultSettings, LAYOUT_KEYS, uid } from './store.js?v=2.0';
-import { norm } from './matcher.js?v=2.0';
-import { VoiceFollower, voiceSupported, voiceLog } from './voice.js?v=2.0';
-import { openCamera, Recorder, pickMime } from './camera.js?v=2.0';
+import { loadScripts, saveScripts, loadSettings, saveSettings, defaultSettings, LAYOUT_KEYS, uid } from './store.js?v=2.1';
+import { norm } from './matcher.js?v=2.1';
+import { VoiceFollower, voiceSupported, voiceLog, logVoice } from './voice.js?v=2.1';
+import { openCamera, openMic, Recorder, pickMime } from './camera.js?v=2.1';
 
-const VERSION = '2.0';
+const VERSION = '2.1';
 
 // ---------- Utilidades ----------
 const $ = (s, root = document) => root.querySelector(s);
@@ -429,7 +429,7 @@ async function importExcel(file) {
   toast('Leyendo el Excel…', 15000);
   let rows;
   try {
-    const { readWorkbook, scriptsFromWorkbook } = await import('./xlsx.js?v=2.0');
+    const { readWorkbook, scriptsFromWorkbook } = await import('./xlsx.js?v=2.1');
     rows = scriptsFromWorkbook(await readWorkbook(file));
   } catch (e) {
     toast('No pude leer el Excel: ' + e.message, 6000);
@@ -806,6 +806,7 @@ async function startCamera() {
     if (currentView !== 'prompter' || !settings.camera) { stream.getTracks().forEach((t) => t.stop()); return false; }
     P.stream = stream;
     P.hasAudio = audio;
+    watchAudio(stream.getAudioTracks()[0]);
     if (!audio) toast('Sin micrófono: el video se va a grabar sin sonido.', 5000);
     const v = $('#cam');
     v.srcObject = stream;
@@ -834,17 +835,54 @@ function cameraLost() {
   return !P.stream || P.stream.getVideoTracks().every((t) => t.readyState === 'ended');
 }
 
+const audioState = (t) => (t ? `${t.readyState}${t.muted ? ' silenciado' : ''}${t.enabled ? '' : ' deshabilitado'}` : 'sin pista');
+
+function watchAudio(track) {
+  if (!track) return;
+  track.onended = () => logVoice('mic', 'la pista de audio se cortó');
+  track.onmute = () => logVoice('mic', 'silenciado');
+  track.onunmute = () => logVoice('mic', 'activo de nuevo');
+}
+
+// Micrófono nuevo para cada toma. Si no se puede, se sigue con el anterior si sigue vivo.
+async function freshMic() {
+  if (!P.stream) return false;
+  const old = P.stream.getAudioTracks()[0];
+  try {
+    const track = await openMic();
+    if (old) { P.stream.removeTrack(old); old.stop(); }
+    P.stream.addTrack(track);
+    watchAudio(track);
+    P.hasAudio = true;
+    logVoice('mic', `nuevo para la toma (${audioState(track)})`);
+    return true;
+  } catch (e) {
+    logVoice('mic', `no se pudo reabrir: ${e.name}`);
+    P.hasAudio = !!old && old.readyState === 'live';
+    return P.hasAudio;
+  }
+}
+
 async function onRecord() {
   if (P.recording) return stopRecording();
   if (P.counting) { cancelCountdown(); stopPrompting(); return; }
+  if (P.preparing) return;
   if (!settings.camera) { toast('Activá la cámara en Ajustes para grabar.'); return; }
-  if (cameraLost()) {
-    stopCamera();
-    if (!(await startCamera())) return;
+  P.preparing = true;
+  try {
+    if (cameraLost()) {
+      stopCamera();
+      if (!(await startCamera())) return;
+    }
+    // Orden importante en iPhone: primero el micrófono de la toma, después el reconocimiento
+    // de voz (que queda en pausa hasta que termine la cuenta regresiva).
+    P.voice?.stop();
+    if (!(await freshMic())) toast('No pude abrir el micrófono: esta toma se va a grabar sin sonido.', 5000);
+    if (P.mode === 'voice') { startVoice(); P.voice && (P.voice.paused = true); }
+    startCountdown(Number(settings.countdown) || 0, beginRecording);
+  } finally {
+    P.preparing = false;
   }
-  // La voz arranca ya (iOS exige que sea dentro del toque), pero en pausa hasta que termine la cuenta.
-  if (P.mode === 'voice') { startVoice(); P.voice && (P.voice.paused = true); }
-  startCountdown(Number(settings.countdown) || 0, beginRecording);
 }
 
 function startCountdown(n, done) {
@@ -870,7 +908,10 @@ function cancelCountdown() {
 
 function beginRecording() {
   try {
-    P.recorder = new Recorder(P.stream);
+    // Se arma el stream de la toma con las pistas actuales (video + micrófono recién abierto).
+    const tracks = [...P.stream.getVideoTracks(), ...P.stream.getAudioTracks().filter((t) => t.readyState === 'live')];
+    logVoice('rec', `inicio · audio: ${audioState(P.stream.getAudioTracks()[0])}`);
+    P.recorder = new Recorder(new MediaStream(tracks));
     P.recorder.start();
   } catch (e) {
     toast('No pude iniciar la grabación: ' + e.message, 6000);
@@ -879,6 +920,7 @@ function beginRecording() {
   }
   P.recording = true;
   P.recStart = performance.now();
+  if (P.voice) P.voice.gentle = true;
   const rt = $('#rec-time');
   rt.textContent = '00:00';
   rt.hidden = false;
@@ -897,6 +939,8 @@ async function stopRecording() {
   clearInterval(P.recTimer);
   $('#rec-time').hidden = true;
   const duration = (performance.now() - P.recStart) / 1000;
+  logVoice('rec', `fin · audio: ${audioState(P.stream?.getAudioTracks()[0])}`);
+  if (P.voice) P.voice.gentle = false;
   stopPrompting();
   const blob = await P.recorder.stop();
   P.recorder = null;
@@ -918,7 +962,17 @@ function showTake(blob, duration) {
     };
     sh.append(
       h('h2', {}, 'Tu toma'),
-      h('video', { class: 'take-video', src: url, controls: true, playsinline: true }),
+      h('video', {
+        class: 'take-video', src: url, controls: true, playsinline: true,
+        // Safari informa las pistas de audio del archivo: si no hay, avisamos ya.
+        onloadedmetadata: (e) => {
+          const at = e.currentTarget.audioTracks;
+          if (at && at.length === 0) {
+            logVoice('rec', 'la toma quedó SIN audio');
+            e.currentTarget.after(h('p', { class: 'warn' }, '⚠︎ Esta toma quedó sin sonido. Volvé a grabarla; si se repite, copiame el registro de voz desde Ajustes.'));
+          }
+        },
+      }),
       h('p', { class: 'info' }, `${fmtClock(duration)} · ${(blob.size / 1048576).toFixed(1)} MB · ${ext.toUpperCase()}`),
       h('div', { class: 'sheet-actions' },
         h('button', { class: 'btn primary', onclick: () => { saved = true; shareOrDownload(blob, name, s?.title); } },

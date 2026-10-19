@@ -1,0 +1,4 @@
+# Netlify: siempre revalidar con el servidor (si no cambió, responde 304 y es instantáneo),
+# así el iPhone nunca queda con archivos viejos después de una actualización.
+/*
+  Cache-Control: no-cache
