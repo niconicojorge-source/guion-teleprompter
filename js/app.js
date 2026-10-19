@@ -1,10 +1,10 @@
 // El ?v= de cada import hace que una versión nunca se mezcle con archivos viejos en caché.
-import { loadScripts, saveScripts, loadSettings, saveSettings, defaultSettings, LAYOUT_KEYS, uid } from './store.js?v=1.5';
-import { norm } from './matcher.js?v=1.5';
-import { VoiceFollower, voiceSupported, voiceLog } from './voice.js?v=1.5';
-import { openCamera, Recorder, pickMime } from './camera.js?v=1.5';
+import { loadScripts, saveScripts, loadSettings, saveSettings, defaultSettings, LAYOUT_KEYS, uid } from './store.js?v=1.6';
+import { norm } from './matcher.js?v=1.6';
+import { VoiceFollower, voiceSupported, voiceLog } from './voice.js?v=1.6';
+import { openCamera, Recorder, pickMime } from './camera.js?v=1.6';
 
-const VERSION = '1.5';
+const VERSION = '1.6';
 
 // ---------- Utilidades ----------
 const $ = (s, root = document) => root.querySelector(s);
@@ -101,7 +101,6 @@ function confirmSheet(msg, okLabel) {
 // ---------- Datos ----------
 let scripts = loadScripts();
 let settings = loadSettings();
-let activeCat = null;
 let currentView = null;
 
 const persist = () => saveScripts(scripts);
@@ -129,8 +128,8 @@ function download(blob, name) {
 // ---------- Navegación ----------
 function go(path) { location.hash = path; }
 
-// Carpeta a la que vuelve un guion: la de su día, o el inicio si no tiene fecha.
-const homeOf = (s) => (s?.date ? '/f/' + s.date.split('-').join('/') : '/');
+// A dónde vuelve un guion al cerrarlo: el día de su nicho, o "Otros guiones" si no tiene fecha.
+const homeOf = (s) => (s?.date ? `${nicheBase(nicheKey(s.category))}/${s.date.split('-').join('/')}` : scripts.some((x) => x.date) ? '/o' : '/');
 
 function route() {
   const [, view, ...rest] = (location.hash.slice(1) || '/').split('/');
@@ -143,7 +142,9 @@ function route() {
   }
   if (view === 'edit' && getScript(id)) return showEditor(id);
   if (view === 'read' && getScript(id)) return showPrompter(id);
-  showLibrary(view === 'f' ? rest.filter(Boolean) : []);
+  if (view === 'n') return showLibrary({ niche: decodeURIComponent(rest[0] || '_'), parts: rest.slice(1).filter(Boolean) });
+  if (view === 'o') return showLibrary({ other: true });
+  showLibrary();
 }
 
 function setView(name) {
@@ -154,9 +155,16 @@ function setView(name) {
   currentView = name;
 }
 
-// ---------- Biblioteca (carpetas Año → Mes → Día) ----------
+// ---------- Biblioteca: calendario de producción (Nicho → Año → Mes → Día) ----------
 const MONTHS = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
-let folder = []; // [] | [año] | [año, mes] | [año, mes, día]
+// niche: clave del nicho (la categoría; '_' = sin nicho) · parts: [] | [año] | [año, mes] | [año, mes, día]
+// other: lista de guiones sin fecha.
+let lib = { niche: null, parts: [], other: false };
+
+const nicheKey = (cat) => (cat || '').trim() || '_';
+const nicheName = (key) => (key === '_' ? 'Sin nicho' : key);
+const nicheBase = (key) => '/n/' + encodeURIComponent(key);
+const currentNiche = () => (lib.niche && lib.niche !== '_' ? lib.niche : '');
 
 function todayISO() {
   const d = new Date();
@@ -170,53 +178,73 @@ function dayLabel(iso, withMonth = false) {
 }
 
 const shortDate = (iso) => (iso ? new Date(iso + 'T12:00').toLocaleDateString('es-AR', { day: 'numeric', month: 'short' }) : '—');
-const folderLabel = (parts) => (parts.length === 1 ? parts[0] : parts.length === 2 ? MONTHS[Number(parts[1]) - 1] : dayLabel(parts.join('-')));
+const folderLabel = (parts) => (parts.length === 1 ? parts[0] : parts.length === 2 ? `${MONTHS[Number(parts[1]) - 1]} ${parts[0]}` : dayLabel(parts.join('-')));
+const crumbLabel = (parts) => (parts.length === 2 ? MONTHS[Number(parts[1]) - 1] : folderLabel(parts));
 const byDate = (a, b) => (a.date || '').localeCompare(b.date || '') || (a.time || '').localeCompare(b.time || '') || (a.code || '').localeCompare(b.code || '');
 
-function showLibrary(path = []) {
+function groupBy(list, keyOf) {
+  const groups = new Map();
+  for (const s of list) {
+    const k = keyOf(s);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(s);
+  }
+  return groups;
+}
+
+function showLibrary(state = {}) {
   setView('library');
-  folder = path;
+  lib = { niche: state.niche ?? null, parts: state.parts || [], other: !!state.other };
   renderLibrary();
 }
 
 function renderLibrary() {
   $('#version').textContent = `Guion v${VERSION}` + (voiceSupported ? '' : ' · sin reconocimiento de voz en este navegador');
-  $('#lib-title').textContent = folder.length ? folderLabel(folder) : 'Guion';
   const q = fold($('#search').value.trim());
-  const cats = categories();
-  if (activeCat && !cats.includes(activeCat)) activeCat = null;
+  const { niche, parts, other } = lib;
+  const dated = scripts.filter((s) => s.date);
+  const undated = scripts.filter((s) => !s.date).sort((a, b) => b.updatedAt - a.updatedAt);
 
-  const chips = $('#chips');
-  chips.hidden = !cats.length;
-  chips.replaceChildren(...[null, ...cats].map((c) =>
-    h('button', { class: 'chip' + (activeCat === c ? ' on' : ''), onclick: () => { activeCat = c; renderLibrary(); } }, c ?? 'Todos')));
-
+  $('#lib-title').textContent = other ? 'Otros guiones'
+    : niche != null ? (parts.length ? folderLabel(parts) : nicheName(niche))
+      : dated.length ? 'Producción' : 'Guion';
   renderCrumbs(q);
-  const list = scripts.filter((s) => !activeCat || (s.category || '').trim() === activeCat);
+
+  const pool = other ? undated : niche != null ? dated.filter((s) => nicheKey(s.category) === niche) : scripts;
   const items = [];
 
   if (q) {
-    list.filter((s) => fold(`${s.title} ${s.code || ''} ${s.text}`).includes(q)).sort(byDate)
+    pool.filter((s) => fold(`${s.title} ${s.code || ''} ${s.text}`).includes(q)).sort(byDate)
       .forEach((s) => items.push(card(s, true)));
+  } else if (other || (niche == null && !dated.length)) {
+    undated.forEach((s) => items.push(card(s)));
+  } else if (niche == null) {
+    // Inicio: un panel por nicho.
+    items.push(h('li', { class: 'group' }, 'Elegí el nicho'));
+    // Mismo orden que en el Excel (el orden en que se importaron).
+    for (const [key, list] of groupBy(dated, (s) => nicheKey(s.category))) {
+      items.push(nicheTile(key, list));
+    }
+    if (undated.length) items.push(nicheTile(null, undated));
   } else {
-    const dated = list.filter((s) => s.date);
-    const [y, m, d] = folder;
+    const base = nicheBase(niche);
+    const [y, m, d] = parts;
     if (d) {
-      dated.filter((s) => s.date === `${y}-${m}-${d}`).sort(byDate).forEach((s) => items.push(card(s)));
+      pool.filter((s) => s.date === `${y}-${m}-${d}`).sort(byDate).forEach((s) => items.push(card(s)));
     } else if (m) {
-      items.push(...groupRows(dated.filter((s) => s.date.startsWith(`${y}-${m}-`)), (s) => s.date,
-        (iso) => ({ label: dayLabel(iso), path: '/f/' + iso.split('-').join('/'), dots: true, today: iso === todayISO() })));
+      const month = pool.filter((s) => s.date.startsWith(`${y}-${m}-`));
+      items.push(calendar(Number(y), Number(m), month, `${base}/${y}/${m}`));
     } else if (y) {
-      items.push(...groupRows(dated.filter((s) => s.date.startsWith(y + '-')), (s) => s.date.slice(0, 7),
-        (ym) => ({ label: MONTHS[Number(ym.slice(5)) - 1], path: '/f/' + ym.replace('-', '/') })));
+      const groups = groupBy(pool.filter((s) => s.date.startsWith(y + '-')), (s) => s.date.slice(5, 7));
+      for (const mm of [...groups.keys()].sort()) {
+        items.push(folderRow({ label: MONTHS[Number(mm) - 1], path: `${base}/${y}/${mm}`, list: groups.get(mm) }));
+      }
     } else {
       const t = todayISO();
-      const todays = dated.filter((s) => s.date === t);
-      if (todays.length) items.push(folderRow({ label: 'Hoy · ' + dayLabel(t, true), path: '/f/' + t.split('-').join('/'), list: todays, dots: true, today: true }));
-      items.push(...groupRows(dated, (s) => s.date.slice(0, 4), (yy) => ({ label: yy, path: '/f/' + yy })));
-      const undated = list.filter((s) => !s.date).sort((a, b) => b.updatedAt - a.updatedAt);
-      if (undated.length && dated.length) items.push(h('li', { class: 'group' }, 'Sin fecha'));
-      undated.forEach((s) => items.push(card(s)));
+      const todays = pool.filter((s) => s.date === t);
+      if (todays.length) items.push(folderRow({ label: 'Hoy · ' + dayLabel(t, true), path: `${base}/${t.split('-').join('/')}`, list: todays, dots: true, today: true }));
+      const groups = groupBy(pool, (s) => s.date.slice(0, 4));
+      for (const yy of [...groups.keys()].sort()) items.push(folderRow({ label: yy, path: `${base}/${yy}`, list: groups.get(yy) }));
     }
   }
   $('#script-list').replaceChildren(...items);
@@ -229,39 +257,80 @@ function renderLibrary() {
 
 function renderCrumbs(q) {
   const nav = $('#crumbs');
-  nav.hidden = !!q || !folder.length;
+  const { niche, parts, other } = lib;
+  nav.hidden = !!q || (niche == null && !other);
   if (nav.hidden) return;
-  const parts = [h('button', { onclick: () => go('/') }, 'Inicio')];
-  folder.forEach((_, i) => {
-    const sub = folder.slice(0, i + 1);
-    parts.push(h('span', { class: 'sep' }, '›'),
-      i === folder.length - 1 ? h('span', { class: 'here' }, folderLabel(sub)) : h('button', { onclick: () => go('/f/' + sub.join('/')) }, folderLabel(sub)));
+  const trail = [['Inicio', '/']];
+  if (other) trail.push(['Otros guiones', null]);
+  else {
+    trail.push([nicheName(niche), nicheBase(niche)]);
+    parts.forEach((_, i) => trail.push([crumbLabel(parts.slice(0, i + 1)), `${nicheBase(niche)}/${parts.slice(0, i + 1).join('/')}`]));
+  }
+  const out = [];
+  trail.forEach(([label, path], i) => {
+    if (i) out.push(h('span', { class: 'sep' }, '›'));
+    out.push(i === trail.length - 1 ? h('span', { class: 'here' }, label) : h('button', { onclick: () => go(path) }, label));
   });
-  nav.replaceChildren(...parts);
+  nav.replaceChildren(...out);
 }
 
-function groupRows(list, keyOf, info) {
-  const groups = new Map();
-  for (const s of list) {
-    const k = keyOf(s);
-    if (!groups.has(k)) groups.set(k, []);
-    groups.get(k).push(s);
-  }
-  return [...groups.keys()].sort().map((k) => folderRow({ ...info(k), list: groups.get(k) }));
+function progress(list) {
+  const done = list.filter((s) => s.done).length;
+  return { done, total: list.length, pct: list.length ? Math.round((done / list.length) * 100) : 0 };
+}
+
+function nicheTile(key, list) {
+  const p = progress(list);
+  const t = todayISO();
+  const today = key == null ? [] : list.filter((s) => s.date === t);
+  const tp = progress(today);
+  return h('li', { class: 'niche' + (key == null ? ' other' : '') },
+    h('button', { onclick: () => go(key == null ? '/o' : nicheBase(key)) },
+      h('span', { class: 'n-main' },
+        h('span', { class: 'n-name' }, key == null ? 'Otros guiones' : nicheName(key)),
+        h('span', { class: 'n-sub' }, key == null ? `${p.total} sin fecha` : `${p.total} guiones · ${p.done} hechos`),
+        today.length ? h('span', { class: 'n-today' + (tp.done === tp.total ? ' all' : '') }, `Hoy: ${tp.done} de ${tp.total} hechos`) : null,
+        key == null ? null : h('span', { class: 'meter wide' }, h('i', { style: `width:${p.pct}%` }))),
+      h('span', { class: 'chev', html: ICONS.chevron })));
 }
 
 function folderRow({ label, path, list, dots, today }) {
-  const done = list.filter((s) => s.done).length;
-  const progress = dots
+  const p = progress(list);
+  const bar = dots
     ? h('span', { class: 'dots' }, list.slice().sort(byDate).map((s) => h('i', { class: s.done ? 'ok' : '' })))
-    : h('span', { class: 'meter' }, h('i', { style: `width:${Math.round((done / list.length) * 100)}%` }));
+    : h('span', { class: 'meter' }, h('i', { style: `width:${p.pct}%` }));
   return h('li', { class: 'folder' + (today ? ' today' : '') },
     h('button', { onclick: () => go(path) },
       h('span', { class: 'f-main' },
         h('span', { class: 'f-name' }, label),
-        h('span', { class: 'f-sub' + (done === list.length ? ' all' : '') }, `${done} de ${list.length} hechos`)),
-      progress,
+        h('span', { class: 'f-sub' + (p.done === p.total ? ' all' : '') }, `${p.done} de ${p.total} hechos`)),
+      bar,
       h('span', { class: 'chev', html: ICONS.chevron })));
+}
+
+// Mes como calendario: cada día con guiones muestra un punto por guion (verde = hecho).
+function calendar(y, m, list, base) {
+  const byDay = groupBy(list, (s) => s.date);
+  const t = todayISO();
+  const cells = [];
+  const lead = (new Date(y, m - 1, 1).getDay() + 6) % 7; // semana empieza el lunes
+  for (let i = 0; i < lead; i++) cells.push(h('span', { class: 'cal-day blank' }));
+  const days = new Date(y, m, 0).getDate();
+  for (let d = 1; d <= days; d++) {
+    const iso = `${y}-${pad(m)}-${pad(d)}`;
+    const items = (byDay.get(iso) || []).sort(byDate);
+    const cls = 'cal-day' + (iso === t ? ' today' : '');
+    if (!items.length) { cells.push(h('span', { class: cls + ' off' }, h('b', {}, d))); continue; }
+    const p = progress(items);
+    cells.push(h('button', { class: cls + (p.done === p.total ? ' all' : ''), 'aria-label': `${dayLabel(iso)}: ${p.done} de ${p.total} hechos`, onclick: () => go(`${base}/${pad(d)}`) },
+      h('b', {}, d),
+      h('span', { class: 'dots' }, items.map((s) => h('i', { class: s.done ? 'ok' : '' })))));
+  }
+  const p = progress(list);
+  return h('li', { class: 'cal-wrap' },
+    h('div', { class: 'cal-head' }, ['L', 'M', 'M', 'J', 'V', 'S', 'D'].map((x) => h('span', {}, x))),
+    h('div', { class: 'cal' }, cells),
+    h('p', { class: 'cal-sum' + (p.done === p.total ? ' all' : '') }, `${p.done} de ${p.total} guiones hechos este mes`));
 }
 
 function setDone(s, value) {
@@ -329,8 +398,8 @@ function scriptMenu(id, fromEditor = false) {
 
 function newScript() {
   const now = Date.now();
-  const date = folder.length === 3 ? folder.join('-') : '';
-  const s = { id: uid(), title: '', category: activeCat || '', text: '', date, done: false, createdAt: now, updatedAt: now };
+  const date = lib.parts.length === 3 ? lib.parts.join('-') : '';
+  const s = { id: uid(), title: '', category: currentNiche(), text: '', date, done: false, createdAt: now, updatedAt: now };
   scripts.unshift(s);
   persist();
   go('/edit/' + s.id);
@@ -340,11 +409,11 @@ async function importFiles(files) {
   const excel = files.filter((f) => /\.xlsx$/i.test(f.name));
   const texts = files.filter((f) => !/\.xlsx$/i.test(f.name));
   if (texts.length) {
-    const date = folder.length === 3 ? folder.join('-') : '';
+    const date = lib.parts.length === 3 ? lib.parts.join('-') : '';
     for (const f of texts) {
       const now = Date.now();
       const text = (await f.text()).replace(/\r\n?/g, '\n');
-      scripts.unshift({ id: uid(), title: f.name.replace(/\.[^.]+$/, ''), category: activeCat || '', text, date, done: false, createdAt: now, updatedAt: now });
+      scripts.unshift({ id: uid(), title: f.name.replace(/\.[^.]+$/, ''), category: currentNiche(), text, date, done: false, createdAt: now, updatedAt: now });
     }
     persist();
     renderLibrary();
@@ -361,7 +430,7 @@ async function importExcel(file) {
   toast('Leyendo el Excel…', 15000);
   let rows;
   try {
-    const { readWorkbook, scriptsFromWorkbook } = await import('./xlsx.js?v=1.5');
+    const { readWorkbook, scriptsFromWorkbook } = await import('./xlsx.js?v=1.6');
     rows = scriptsFromWorkbook(await readWorkbook(file));
   } catch (e) {
     toast('No pude leer el Excel: ' + e.message, 6000);
@@ -408,7 +477,7 @@ function applyImport(rows, existing) {
   }
   if (!persist()) toast('No hay espacio para guardar todo en este dispositivo.', 6000);
   else toast(`Listo: ${added} guiones nuevos${rows.length - added ? ` y ${rows.length - added} actualizados` : ''}.`, 4000);
-  if ((location.hash || '#/') === '#/') showLibrary([]); else go('/');
+  if ((location.hash || '#/') === '#/') showLibrary(); else go('/');
 }
 
 // ---------- Editor ----------

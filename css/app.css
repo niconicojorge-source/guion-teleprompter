@@ -300,3 +300,29 @@ svg { display: block; }
 .btn:disabled { opacity: 0.8; }
 .w.num { color: var(--accent); opacity: 0.75; font-size: 0.8em; }
 .w.aside { color: rgba(255, 255, 255, 0.42); font-style: italic; }
+
+/* ---------- Calendario de producción ---------- */
+.niche button { width: 100%; display: flex; align-items: center; gap: 12px; text-align: left; background: var(--surface); border: 1px solid var(--line); border-radius: 20px; padding: 20px 14px 20px 20px; }
+.niche + .niche { margin-top: 2px; }
+.n-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.n-name { font-size: 24px; font-weight: 800; letter-spacing: -0.01em; }
+.n-sub { font-size: 14px; color: var(--muted); }
+.n-today { font-size: 14px; font-weight: 600; color: var(--accent); }
+.n-today.all { color: var(--ok); }
+.niche.other button { padding: 14px 14px 14px 20px; border-radius: 16px; }
+.niche.other .n-name { font-size: 17px; font-weight: 650; }
+.meter.wide { width: 100%; margin-top: 8px; }
+.cal-wrap { list-style: none; background: var(--surface); border: 1px solid var(--line); border-radius: 18px; padding: 12px 10px 14px; }
+.cal-head, .cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.cal-head span { text-align: center; font-size: 12px; font-weight: 600; color: var(--muted); padding-bottom: 6px; }
+.cal-day { aspect-ratio: 1 / 1.08; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; min-width: 0; }
+.cal-day b { font-size: 16px; font-weight: 650; font-variant-numeric: tabular-nums; }
+button.cal-day { background: rgba(255, 69, 58, 0.1); border: 1px solid rgba(255, 69, 58, 0.25); }
+button.cal-day.all { background: rgba(48, 209, 88, 0.12); border-color: rgba(48, 209, 88, 0.35); }
+.cal-day.off { color: #44444f; }
+.cal-day.blank { visibility: hidden; }
+.cal-day.today { box-shadow: 0 0 0 2px var(--accent); }
+.cal-day .dots { gap: 3px; max-width: none; justify-content: center; flex-wrap: nowrap; }
+.cal-day .dots i { width: 6px; height: 6px; }
+.cal-sum { margin: 12px 4px 0; font-size: 13px; color: var(--muted); text-align: center; }
+.cal-sum.all { color: var(--ok); }
