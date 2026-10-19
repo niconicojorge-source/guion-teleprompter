@@ -5,6 +5,8 @@ const STOP = new Set([
   'a', 'al', 'de', 'del', 'el', 'la', 'las', 'los', 'lo', 'un', 'una', 'y', 'e', 'o', 'u',
   'que', 'en', 'es', 'se', 'te', 'me', 'mi', 'tu', 'su', 'no', 'si', 'con', 'por', 'le',
   'les', 'ya', 'yo', 'ni', 'the', 'and', 'of', 'to', 'is', 'it', 'in', 'on', 'at', 'an',
+  'este', 'esta', 'esto', 'estos', 'estas', 'ese', 'esa', 'eso', 'esos', 'esas', 'pero', 'mas',
+  'muy', 'hay', 'son', 'fue', 'era', 'ser', 'va', 'vas', 'voy', 'sin', 'para', 'como', 'bueno',
 ]);
 
 export function norm(word) {
@@ -31,20 +33,31 @@ function lev(a, b) {
   return prev[b.length];
 }
 
-// ¿La palabra dicha es esta palabra del guion? Estricto a propósito: las palabras cortas
-// tienen que ser idénticas ("esto" no es "este"); en las largas se tolera un error del
-// reconocimiento. `partial`: la última palabra de un resultado provisional puede estar a
-// medio decir.
+// Cómo suena la palabra (español): b/v, c/s/z, qu/k, ll/y y h muda dan lo mismo,
+// y las letras dobles cuentan como una. "quepa", "kepa" y "queepa" suenan igual.
+export function phon(w) {
+  return w
+    .replace(/qu/g, 'k').replace(/c([ei])/g, 's$1').replace(/c/g, 'k').replace(/z/g, 's')
+    .replace(/v/g, 'b').replace(/ll/g, 'y').replace(/ch/g, 'x').replace(/h/g, '')
+    .replace(/(.)\1+/g, '$1');
+}
+
+// ¿La palabra dicha es esta palabra del guion? Se compara cómo suenan y se tolera un error
+// proporcional al largo (el reconocimiento no siempre escribe igual que el guion).
+// `partial`: la última palabra de un resultado provisional puede estar a medio decir.
 export function similar(spoken, word, partial = false) {
   if (!spoken || !word) return false;
   if (spoken === word) return true;
-  if (spoken + 's' === word || word + 's' === spoken) return word.length >= 4;
-  if (partial && spoken.length >= 4 && word.startsWith(spoken)) return true;
-  const len = Math.max(spoken.length, word.length);
-  if (len < 6) return false;
-  const tol = len >= 9 ? 2 : 1;
-  if (Math.abs(spoken.length - word.length) > tol) return false;
-  return lev(spoken, word) <= tol;
+  const a = phon(spoken);
+  const b = phon(word);
+  if (a === b) return true;
+  if (a + 's' === b || b + 's' === a) return b.length >= 3;
+  if (partial && a.length >= 3 && b.startsWith(a)) return true;
+  const len = Math.max(a.length, b.length);
+  if (len < 4) return false;
+  const tol = len >= 10 ? 3 : len >= 7 ? 2 : 1;
+  if (Math.abs(a.length - b.length) > tol) return false;
+  return lev(a, b) <= tol;
 }
 
 const weight = (w) => (w.length < 3 || STOP.has(w) ? 0.4 : 1);
@@ -127,24 +140,46 @@ export function locate(words, spoken, pos, { back = 8, ahead = 24 } = {}) {
 }
 
 /**
- * Seguimiento palabra por palabra desde `start`: cada palabra dicha tiene que ser una de las
- * que siguen en el guion (se toleran hasta `window - 1` palabras salteadas o no reconocidas).
+ * Seguimiento palabra por palabra desde `start`.
+ * - "En marcha" (ya venís leyendo el guion en orden): cada palabra que suena como la que
+ *   sigue avanza al instante. Si el reconocimiento no entendió una palabra, se saltea
+ *   (palabras con contenido pueden saltar 1 del guion; las cortas como "el" solo la inmediata).
+ *   Una palabra suelta fuera del guion no corta la marcha; dos seguidas sí.
+ * - Para arrancar (o retomar después de charla fuera del guion) hace falta más evidencia:
+ *   palabra con contenido justo a continuación, o una coincidencia que las palabras
+ *   siguientes confirmen (1 más si se saltea 1 palabra del guion, 2 si se saltean 2 o más).
  * Lo que no está en el guion (muletillas, comentarios) no mueve nada.
- * Las coincidencias débiles necesitan que las palabras siguientes también sigan el guion:
- *  - palabra corta ("el", "de") justo a continuación: 1 palabra más que confirme;
- *  - saltando 1 palabra del guion: 1 palabra más;
- *  - saltando 2 o más: 2 palabras más.
- * Y entre las confirmadas tiene que haber al menos una palabra con contenido.
- * Devuelve { pos, stuck }: stuck = palabras dichas seguidas sin poder ubicarlas en el guion.
+ * Devuelve { pos, stuck, flow }: stuck = palabras dichas seguidas sin ubicar en el guion;
+ * flow = si al final quedó "en marcha".
  */
-export function follow(words, tokens, start, { partialLast = false, window = 5 } = {}) {
+export function follow(words, tokens, start, { partialLast = false, window = 5, flow = false } = {}) {
   let p = start;
   let stuck = 0;
+  let misses = 0;
+  let inFlow = flow && start >= 0;
   const last = tokens.length - 1;
   for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i];
+    const partial = partialLast && i === last;
+
+    if (inFlow) {
+      let hit = -1;
+      for (let k = 1; k <= 2 && p + k < words.length; k++) {
+        const w = words[p + k];
+        // Saltar 1 palabra del guion: si justo antes hubo una palabra no entendida, es la que
+        // faltaba (vale cualquiera); si no, solo con palabras con contenido.
+        if (k === 2 && misses === 0 && (weight(w) < 1 || weight(tok) < 1)) break;
+        if (similar(tok, w, partial && k === 1)) { hit = p + k; break; }
+      }
+      if (hit >= 0) { p = hit; stuck = 0; misses = 0; continue; }
+      stuck++;
+      if (++misses >= 2) inFlow = false;
+      continue;
+    }
+
     let hit = -1;
     for (let k = 1; k <= window && p + k < words.length; k++) {
-      if (similar(tokens[i], words[p + k], partialLast && i === last && k === 1)) { hit = p + k; break; }
+      if (similar(tok, words[p + k], partial && k === 1)) { hit = p + k; break; }
     }
     if (hit < 0) { stuck++; continue; }
     const skip = hit - p - 1;
@@ -154,14 +189,14 @@ export function follow(words, tokens, start, { partialLast = false, window = 5 }
     for (let c = 1; c <= need; c++) {
       if (cur >= words.length - 1) break; // fin del guion: no queda nada que confirme
       const t = tokens[i + c];
-      const partial = partialLast && i + c === last;
-      const nxt = t == null ? -1 : similar(t, words[cur + 1], partial) ? cur + 1 : similar(t, words[cur + 2]) ? cur + 2 : -1;
+      const tPartial = partialLast && i + c === last;
+      const nxt = t == null ? -1 : similar(t, words[cur + 1], tPartial) ? cur + 1 : similar(t, words[cur + 2]) ? cur + 2 : -1;
       if (nxt < 0) { need = -1; break; }
       cur = nxt;
       if (weight(words[cur]) === 1) content = true;
     }
-    if (need >= 0 && content) { p = hit; stuck = 0; continue; }
+    if (need >= 0 && content) { p = hit; stuck = 0; misses = 0; inFlow = true; continue; }
     stuck++;
   }
-  return { pos: p, stuck };
+  return { pos: p, stuck, flow: inFlow };
 }

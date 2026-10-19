@@ -1,10 +1,10 @@
 // El ?v= de cada import hace que una versión nunca se mezcle con archivos viejos en caché.
-import { loadScripts, saveScripts, loadSettings, saveSettings, defaultSettings, LAYOUT_KEYS, uid } from './store.js?v=1.8';
-import { norm } from './matcher.js?v=1.8';
-import { VoiceFollower, voiceSupported, voiceLog } from './voice.js?v=1.8';
-import { openCamera, Recorder, pickMime } from './camera.js?v=1.8';
+import { loadScripts, saveScripts, loadSettings, saveSettings, defaultSettings, LAYOUT_KEYS, uid } from './store.js?v=1.9';
+import { norm } from './matcher.js?v=1.9';
+import { VoiceFollower, voiceSupported, voiceLog } from './voice.js?v=1.9';
+import { openCamera, Recorder, pickMime } from './camera.js?v=1.9';
 
-const VERSION = '1.8';
+const VERSION = '1.9';
 
 // ---------- Utilidades ----------
 const $ = (s, root = document) => root.querySelector(s);
@@ -428,7 +428,7 @@ async function importExcel(file) {
   toast('Leyendo el Excel…', 15000);
   let rows;
   try {
-    const { readWorkbook, scriptsFromWorkbook } = await import('./xlsx.js?v=1.8');
+    const { readWorkbook, scriptsFromWorkbook } = await import('./xlsx.js?v=1.9');
     rows = scriptsFromWorkbook(await readWorkbook(file));
   } catch (e) {
     toast('No pude leer el Excel: ' + e.message, 6000);

@@ -1,4 +1,4 @@
-import { tokenize, locate, follow } from './matcher.js?v=1.8';
+import { tokenize, locate, follow } from './matcher.js?v=1.9';
 
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 export const voiceSupported = !!SR;
@@ -41,6 +41,8 @@ export class VoiceFollower {
     this.offset = 0;  // palabras de la sesión ya consumidas antes de `base`
     this.carry = [];  // palabras dichas antes de la pausa que todavía esperaban confirmación
     this.trail = [];
+    this.flow = false;        // ¿venías leyendo el guion en orden?
+    this.sessionFlow = false; // estado "en marcha" con el que arrancó esta sesión
   }
 
   start() {
@@ -131,8 +133,10 @@ export class VoiceFollower {
     this.lastKey = '';
     this.base = this.pos;
     this.offset = 0;
-    if (!keepTrail) this.trail = [];
+    if (!keepTrail) { this.trail = []; this.flow = false; }
     this.carry = this.trail;
+    // Tras una pausa entre frases seguís "en marcha": la primera palabra ya avanza.
+    this.sessionFlow = this.flow;
     this.lastEventAt = performance.now();
     try {
       r.start();
@@ -172,13 +176,14 @@ export class VoiceFollower {
     note(lastRes.isFinal ? 'final' : 'heard', `"${lastText.trim().slice(-50)}"`);
 
     // En pausa (cuenta regresiva) lo que digas no cuenta: se sigue desde acá al arrancar.
-    if (this.paused) { this.base = this.pos; this.offset = tokens.length; this.carry = []; return; }
+    if (this.paused) { this.base = this.pos; this.offset = tokens.length; this.carry = []; this.sessionFlow = false; return; }
 
     // 1) Seguimiento normal: solo avanza con palabras que son las que siguen en el guion.
     const fresh = this.carry.concat(tokens.slice(this.offset));
     if (!fresh.length) return;
-    const r = follow(this.words, fresh, this.base, { partialLast: !lastRes.isFinal });
+    const r = follow(this.words, fresh, this.base, { partialLast: !lastRes.isFinal, flow: this.sessionFlow });
     this.trail = r.stuck ? fresh.slice(-Math.min(r.stuck, 6)) : [];
+    this.flow = r.flow;
     if (r.pos > this.pos) {
       if (this.pending) note('salto descartado', `→${this.pending.j}`);
       this.pending = null;
@@ -194,6 +199,8 @@ export class VoiceFollower {
         this.base = this.pending.j;
         this.offset = this.pending.offset;
         this.carry = [];
+        this.sessionFlow = true;
+        this.flow = true;
         this.pending = null;
         this.moveTo(c.pos, 'reubicado');
         return;
