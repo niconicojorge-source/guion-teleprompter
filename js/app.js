@@ -1,10 +1,10 @@
 // El ?v= de cada import hace que una versión nunca se mezcle con archivos viejos en caché.
-import { loadScripts, saveScripts, loadSettings, saveSettings, defaultSettings, LAYOUT_KEYS, uid } from './store.js?v=1.4';
-import { norm } from './matcher.js?v=1.4';
-import { VoiceFollower, voiceSupported, voiceLog } from './voice.js?v=1.4';
-import { openCamera, Recorder, pickMime } from './camera.js?v=1.4';
+import { loadScripts, saveScripts, loadSettings, saveSettings, defaultSettings, LAYOUT_KEYS, uid } from './store.js?v=1.5';
+import { norm } from './matcher.js?v=1.5';
+import { VoiceFollower, voiceSupported, voiceLog } from './voice.js?v=1.5';
+import { openCamera, Recorder, pickMime } from './camera.js?v=1.5';
 
-const VERSION = '1.4';
+const VERSION = '1.5';
 
 // ---------- Utilidades ----------
 const $ = (s, root = document) => root.querySelector(s);
@@ -31,6 +31,7 @@ const ICONS = {
   sliders: svg('<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>'),
   more: svg('<circle cx="5" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="19" cy="12" r="1.6" fill="currentColor"/>', 'stroke="none"'),
   import: svg('<path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 20h14"/>'),
+  chevron: svg('<path d="M9.5 6l6 6-6 6"/>'),
 };
 
 const fold = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -128,8 +129,12 @@ function download(blob, name) {
 // ---------- Navegación ----------
 function go(path) { location.hash = path; }
 
+// Carpeta a la que vuelve un guion: la de su día, o el inicio si no tiene fecha.
+const homeOf = (s) => (s?.date ? '/f/' + s.date.split('-').join('/') : '/');
+
 function route() {
-  const [, view, id] = (location.hash.slice(1) || '/').split('/');
+  const [, view, ...rest] = (location.hash.slice(1) || '/').split('/');
+  const id = rest[0];
   // Si se está grabando, no dejamos que un "atrás" corte la toma.
   if (currentView === 'prompter' && P.recording && !(view === 'read' && id === P.id)) {
     go('/read/' + P.id);
@@ -138,7 +143,7 @@ function route() {
   }
   if (view === 'edit' && getScript(id)) return showEditor(id);
   if (view === 'read' && getScript(id)) return showPrompter(id);
-  showLibrary();
+  showLibrary(view === 'f' ? rest.filter(Boolean) : []);
 }
 
 function setView(name) {
@@ -149,14 +154,34 @@ function setView(name) {
   currentView = name;
 }
 
-// ---------- Biblioteca ----------
-function showLibrary() {
+// ---------- Biblioteca (carpetas Año → Mes → Día) ----------
+const MONTHS = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+let folder = []; // [] | [año] | [año, mes] | [año, mes, día]
+
+function todayISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function dayLabel(iso, withMonth = false) {
+  const [y, m, d] = iso.split('-').map(Number);
+  const s = new Date(y, m - 1, d).toLocaleDateString('es-AR', withMonth ? { weekday: 'long', day: 'numeric', month: 'long' } : { weekday: 'long', day: 'numeric' });
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+const shortDate = (iso) => (iso ? new Date(iso + 'T12:00').toLocaleDateString('es-AR', { day: 'numeric', month: 'short' }) : '—');
+const folderLabel = (parts) => (parts.length === 1 ? parts[0] : parts.length === 2 ? MONTHS[Number(parts[1]) - 1] : dayLabel(parts.join('-')));
+const byDate = (a, b) => (a.date || '').localeCompare(b.date || '') || (a.time || '').localeCompare(b.time || '') || (a.code || '').localeCompare(b.code || '');
+
+function showLibrary(path = []) {
   setView('library');
+  folder = path;
   renderLibrary();
 }
 
 function renderLibrary() {
   $('#version').textContent = `Guion v${VERSION}` + (voiceSupported ? '' : ' · sin reconocimiento de voz en este navegador');
+  $('#lib-title').textContent = folder.length ? folderLabel(folder) : 'Guion';
   const q = fold($('#search').value.trim());
   const cats = categories();
   if (activeCat && !cats.includes(activeCat)) activeCat = null;
@@ -166,23 +191,102 @@ function renderLibrary() {
   chips.replaceChildren(...[null, ...cats].map((c) =>
     h('button', { class: 'chip' + (activeCat === c ? ' on' : ''), onclick: () => { activeCat = c; renderLibrary(); } }, c ?? 'Todos')));
 
-  const list = scripts
-    .filter((s) => (!activeCat || (s.category || '').trim() === activeCat) && (!q || fold(s.title + ' ' + s.text).includes(q)))
-    .sort((a, b) => b.updatedAt - a.updatedAt);
-  $('#script-list').replaceChildren(...list.map(card));
+  renderCrumbs(q);
+  const list = scripts.filter((s) => !activeCat || (s.category || '').trim() === activeCat);
+  const items = [];
+
+  if (q) {
+    list.filter((s) => fold(`${s.title} ${s.code || ''} ${s.text}`).includes(q)).sort(byDate)
+      .forEach((s) => items.push(card(s, true)));
+  } else {
+    const dated = list.filter((s) => s.date);
+    const [y, m, d] = folder;
+    if (d) {
+      dated.filter((s) => s.date === `${y}-${m}-${d}`).sort(byDate).forEach((s) => items.push(card(s)));
+    } else if (m) {
+      items.push(...groupRows(dated.filter((s) => s.date.startsWith(`${y}-${m}-`)), (s) => s.date,
+        (iso) => ({ label: dayLabel(iso), path: '/f/' + iso.split('-').join('/'), dots: true, today: iso === todayISO() })));
+    } else if (y) {
+      items.push(...groupRows(dated.filter((s) => s.date.startsWith(y + '-')), (s) => s.date.slice(0, 7),
+        (ym) => ({ label: MONTHS[Number(ym.slice(5)) - 1], path: '/f/' + ym.replace('-', '/') })));
+    } else {
+      const t = todayISO();
+      const todays = dated.filter((s) => s.date === t);
+      if (todays.length) items.push(folderRow({ label: 'Hoy · ' + dayLabel(t, true), path: '/f/' + t.split('-').join('/'), list: todays, dots: true, today: true }));
+      items.push(...groupRows(dated, (s) => s.date.slice(0, 4), (yy) => ({ label: yy, path: '/f/' + yy })));
+      const undated = list.filter((s) => !s.date).sort((a, b) => b.updatedAt - a.updatedAt);
+      if (undated.length && dated.length) items.push(h('li', { class: 'group' }, 'Sin fecha'));
+      undated.forEach((s) => items.push(card(s)));
+    }
+  }
+  $('#script-list').replaceChildren(...items);
 
   const empty = $('#empty');
-  empty.hidden = list.length > 0;
-  empty.textContent = scripts.length ? 'No hay guiones que coincidan.' : 'Todavía no tenés guiones. Creá el primero.';
+  empty.hidden = items.length > 0;
+  empty.textContent = q ? 'No hay guiones que coincidan.'
+    : scripts.length ? 'No hay guiones acá.' : 'Todavía no tenés guiones. Creá uno o importá tu Excel.';
 }
 
-function card(s) {
+function renderCrumbs(q) {
+  const nav = $('#crumbs');
+  nav.hidden = !!q || !folder.length;
+  if (nav.hidden) return;
+  const parts = [h('button', { onclick: () => go('/') }, 'Inicio')];
+  folder.forEach((_, i) => {
+    const sub = folder.slice(0, i + 1);
+    parts.push(h('span', { class: 'sep' }, '›'),
+      i === folder.length - 1 ? h('span', { class: 'here' }, folderLabel(sub)) : h('button', { onclick: () => go('/f/' + sub.join('/')) }, folderLabel(sub)));
+  });
+  nav.replaceChildren(...parts);
+}
+
+function groupRows(list, keyOf, info) {
+  const groups = new Map();
+  for (const s of list) {
+    const k = keyOf(s);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(s);
+  }
+  return [...groups.keys()].sort().map((k) => folderRow({ ...info(k), list: groups.get(k) }));
+}
+
+function folderRow({ label, path, list, dots, today }) {
+  const done = list.filter((s) => s.done).length;
+  const progress = dots
+    ? h('span', { class: 'dots' }, list.slice().sort(byDate).map((s) => h('i', { class: s.done ? 'ok' : '' })))
+    : h('span', { class: 'meter' }, h('i', { style: `width:${Math.round((done / list.length) * 100)}%` }));
+  return h('li', { class: 'folder' + (today ? ' today' : '') },
+    h('button', { onclick: () => go(path) },
+      h('span', { class: 'f-main' },
+        h('span', { class: 'f-name' }, label),
+        h('span', { class: 'f-sub' + (done === list.length ? ' all' : '') }, `${done} de ${list.length} hechos`)),
+      progress,
+      h('span', { class: 'chev', html: ICONS.chevron })));
+}
+
+function setDone(s, value) {
+  s.done = value;
+  persist();
+}
+
+function statusBtn(s, after = renderLibrary) {
+  return h('button', {
+    class: 'status' + (s.done ? ' ok' : ''),
+    'aria-label': s.done ? 'Hecho (tocá para marcar pendiente)' : 'Pendiente (tocá para marcar hecho)',
+    onclick: () => { setDone(s, !s.done); after(); },
+  }, h('i'));
+}
+
+function card(s, showDate = false) {
   const w = countWords(s.text);
-  return h('li', { class: 'card' },
+  const hook = s.details?.find(([k]) => k.startsWith('Gancho'))?.[1];
+  const meta = [showDate && s.date ? dayLabel(s.date, true) : null, s.time, s.code, s.category, fmtDuration(w)];
+  return h('li', { class: 'card' + (s.done ? ' done' : '') },
+    statusBtn(s),
     h('button', { class: 'card-main', onclick: () => go('/edit/' + s.id) },
       h('h3', {}, s.title || 'Sin título'),
-      h('p', {}, s.text.trim().slice(0, 180) || 'Vacío'),
-      h('span', { class: 'meta' }, [`${w} palabras`, fmtDuration(w), s.category].filter(Boolean).join(' · '))),
+      h('p', {}, hook || s.text.trim().slice(0, 180) || 'Vacío'),
+      h('span', { class: 'meta' }, meta.filter(Boolean).join(' · '))),
     h('button', { class: 'card-act play', 'aria-label': 'Leer', html: ICONS.play, onclick: () => readScript(s.id) }),
     h('button', { class: 'card-act', 'aria-label': 'Más opciones', html: ICONS.more, onclick: () => scriptMenu(s.id) }));
 }
@@ -198,11 +302,12 @@ function scriptMenu(id, fromEditor = false) {
   if (!s) return;
   actionSheet(s.title || 'Sin título', [
     { label: 'Leer en el teleprompter', run: () => readScript(id) },
+    { label: s.done ? 'Marcar como pendiente' : 'Marcar como hecho', run: () => { setDone(s, !s.done); if (fromEditor) edStatus(); else renderLibrary(); } },
     {
       label: 'Duplicar',
       run: () => {
         const now = Date.now();
-        const copy = { ...s, id: uid(), title: (s.title || 'Sin título') + ' (copia)', createdAt: now, updatedAt: now };
+        const copy = { ...s, id: uid(), title: (s.title || 'Sin título') + ' (copia)', code: '', source: '', done: false, createdAt: now, updatedAt: now };
         scripts.unshift(copy);
         persist();
         if (fromEditor) go('/edit/' + copy.id); else renderLibrary();
@@ -216,7 +321,7 @@ function scriptMenu(id, fromEditor = false) {
         if (!(await confirmSheet('¿Eliminar este guion? No se puede deshacer.', 'Eliminar'))) return;
         scripts = scripts.filter((x) => x.id !== id);
         persist();
-        if (fromEditor) { editId = null; go('/'); } else renderLibrary();
+        if (fromEditor) { editId = null; go(homeOf(s)); } else renderLibrary();
       },
     },
   ]);
@@ -224,21 +329,86 @@ function scriptMenu(id, fromEditor = false) {
 
 function newScript() {
   const now = Date.now();
-  const s = { id: uid(), title: '', category: activeCat || '', text: '', createdAt: now, updatedAt: now };
+  const date = folder.length === 3 ? folder.join('-') : '';
+  const s = { id: uid(), title: '', category: activeCat || '', text: '', date, done: false, createdAt: now, updatedAt: now };
   scripts.unshift(s);
   persist();
   go('/edit/' + s.id);
 }
 
 async function importFiles(files) {
-  for (const f of files) {
-    const now = Date.now();
-    const text = (await f.text()).replace(/\r\n?/g, '\n');
-    scripts.unshift({ id: uid(), title: f.name.replace(/\.[^.]+$/, ''), category: activeCat || '', text, createdAt: now, updatedAt: now });
+  const excel = files.filter((f) => /\.xlsx$/i.test(f.name));
+  const texts = files.filter((f) => !/\.xlsx$/i.test(f.name));
+  if (texts.length) {
+    const date = folder.length === 3 ? folder.join('-') : '';
+    for (const f of texts) {
+      const now = Date.now();
+      const text = (await f.text()).replace(/\r\n?/g, '\n');
+      scripts.unshift({ id: uid(), title: f.name.replace(/\.[^.]+$/, ''), category: activeCat || '', text, date, done: false, createdAt: now, updatedAt: now });
+    }
+    persist();
+    renderLibrary();
+    toast(texts.length === 1 ? 'Guion importado' : `${texts.length} guiones importados`);
   }
-  persist();
-  renderLibrary();
-  toast(files.length === 1 ? 'Guion importado' : `${files.length} guiones importados`);
+  for (const f of excel) await importExcel(f);
+}
+
+// Los guiones del Excel se identifican por línea + código: si importás de nuevo
+// una versión actualizada, se actualizan en vez de duplicarse y conservan su estado.
+const excelKey = (line, code, date, time, title) => (code ? `${line}|${code}` : `${line}|${date}|${time}|${title}`);
+
+async function importExcel(file) {
+  toast('Leyendo el Excel…', 15000);
+  let rows;
+  try {
+    const { readWorkbook, scriptsFromWorkbook } = await import('./xlsx.js?v=1.5');
+    rows = scriptsFromWorkbook(await readWorkbook(file));
+  } catch (e) {
+    toast('No pude leer el Excel: ' + e.message, 6000);
+    return;
+  }
+  $('#toast').hidden = true;
+  if (!rows.length) { toast('No encontré ninguna columna "Guion" en ese Excel.', 6000); return; }
+
+  const existing = new Map(scripts.filter((s) => s.source === 'excel').map((s) => [excelKey(s.category, s.code, s.date, s.time, s.title), s]));
+  const lines = {};
+  let updates = 0;
+  for (const r of rows) {
+    const b = (lines[r.line] ||= { n: 0, from: '', to: '' });
+    b.n++;
+    if (r.date && (!b.from || r.date < b.from)) b.from = r.date;
+    if (r.date > b.to) b.to = r.date;
+    if (existing.has(excelKey(r.line, r.code, r.date, r.time, r.title))) updates++;
+  }
+  const done = rows.filter((r) => r.done).length;
+  sheet((sh, close) => {
+    sh.append(
+      h('h2', {}, 'Importar Excel'),
+      h('p', { class: 'msg' }, `Encontré ${rows.length} guiones en "${file.name}":`),
+      h('ul', { class: 'import-sum' }, Object.entries(lines).map(([l, b]) => h('li', {}, h('strong', {}, l), ` · ${b.n} guiones · ${shortDate(b.from)} → ${shortDate(b.to)}`))),
+      h('p', { class: 'info' }, [
+        'Se ordenan en carpetas por año, mes y día.',
+        done ? `${done} figuran como publicados y entran en verde.` : '',
+        updates ? `${updates} ya estaban en la app: se actualizan y conservan su estado.` : '',
+      ].filter(Boolean).join(' ')),
+      h('div', { class: 'sheet-actions' },
+        h('button', { class: 'btn primary', onclick: () => { close(); applyImport(rows, existing); } }, `Importar ${rows.length} guiones`),
+        h('button', { class: 'btn', onclick: () => close() }, 'Cancelar')));
+  });
+}
+
+function applyImport(rows, existing) {
+  const now = Date.now();
+  let added = 0;
+  for (const r of rows) {
+    const data = { title: r.title, category: r.line, text: r.text, date: r.date, time: r.time, code: r.code, details: r.details, source: 'excel', updatedAt: now };
+    const s = existing.get(excelKey(r.line, r.code, r.date, r.time, r.title));
+    if (s) Object.assign(s, data, { done: s.done || r.done });
+    else { scripts.push({ id: uid(), createdAt: now, done: r.done, ...data }); added++; }
+  }
+  if (!persist()) toast('No hay espacio para guardar todo en este dispositivo.', 6000);
+  else toast(`Listo: ${added} guiones nuevos${rows.length - added ? ` y ${rows.length - added} actualizados` : ''}.`, 4000);
+  if ((location.hash || '#/') === '#/') showLibrary([]); else go('/');
 }
 
 // ---------- Editor ----------
@@ -253,8 +423,23 @@ function showEditor(id) {
   $('#ed-cat').value = s.category || '';
   $('#ed-text').value = s.text;
   $('#cat-list').replaceChildren(...categories().map((c) => h('option', { value: c })));
+  const info = [s.date ? dayLabel(s.date, true) : null, s.time, s.code].filter(Boolean).join(' · ');
+  $('#ed-info').textContent = info;
+  $('#ed-info').hidden = !info;
+  const details = s.details || [];
+  $('#ed-details').hidden = !details.length;
+  $('#ed-dl').replaceChildren(...details.flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)]));
+  edStatus();
   edStats();
   if (!s.title && !s.text) setTimeout(() => $('#ed-text').focus(), 60);
+}
+
+function edStatus() {
+  const s = getScript(editId);
+  if (!s) return;
+  const b = $('#ed-status');
+  b.classList.toggle('ok', !!s.done);
+  b.textContent = s.done ? 'Hecho' : 'Pendiente';
 }
 
 function edInput() {
@@ -334,12 +519,23 @@ function renderScript(text) {
     const p = document.createElement('p');
     if (!line.trim()) { p.className = 'gap'; root.append(p); continue; }
     const toks = line.trim().split(/\s+/);
+    // El número de toma ("1.") y las indicaciones entre ( ) o [ ] no se dicen:
+    // se muestran atenuadas y el seguimiento de voz no las espera.
+    // Una toma que empieza con "(Pregunta en off)" la dice otra persona: va entera atenuada.
+    const offLine = /^(\d+[.)]\s*)?\([^)]*\b(off|pregunta)\b[^)]*\)/i.test(line.trim());
+    let aside = false;
     toks.forEach((tok, k) => {
       const sp = document.createElement('span');
-      sp.className = 'w';
       sp.textContent = tok;
-      const n = norm(tok);
-      if (n) { sp.dataset.i = P.words.length; P.words.push(n); P.els.push(sp); }
+      if (/^[([]/.test(tok) || (offLine && k > 0)) aside = true;
+      if (k === 0 && /^\d+[.)]$/.test(tok)) sp.className = 'w num';
+      else if (aside) sp.className = 'w aside';
+      else {
+        sp.className = 'w';
+        const n = norm(tok);
+        if (n) { sp.dataset.i = P.words.length; P.words.push(n); P.els.push(sp); }
+      }
+      if (aside && !offLine && /[)\]][.,;:!?"»]*$/.test(tok)) aside = false;
       p.append(sp);
       if (k < toks.length - 1) p.append(' ');
     });
@@ -682,6 +878,7 @@ function showTake(blob, duration) {
         h('button', { class: 'btn primary', onclick: () => { saved = true; shareOrDownload(blob, name, s?.title); } },
           canShare ? 'Guardar en Fotos / Compartir' : 'Descargar video'),
         canShare ? h('button', { class: 'btn', onclick: () => { saved = true; download(blob, name); } }, 'Descargar archivo') : null,
+        s && !s.done ? h('button', { class: 'btn ok', onclick: (e) => { setDone(s, true); e.currentTarget.textContent = '✓ Guion marcado como hecho'; e.currentTarget.disabled = true; } }, 'Marcar guion como hecho') : null,
         h('button', { class: 'btn', onclick: askClose }, saved ? 'Cerrar' : 'Cerrar sin guardar')));
   }, { dismissable: false, onClose: () => URL.revokeObjectURL(url) });
 }
@@ -869,12 +1066,13 @@ function bind() {
 
   // Editor
   for (const id of ['#ed-title', '#ed-cat', '#ed-text']) $(id).addEventListener('input', edInput);
-  $('#ed-back').addEventListener('click', () => go('/'));
+  $('#ed-back').addEventListener('click', () => go(homeOf(getScript(editId))));
+  $('#ed-status').addEventListener('click', () => { const s = getScript(editId); if (s) { setDone(s, !s.done); edStatus(); } });
   $('#ed-more').addEventListener('click', () => scriptMenu(editId, true));
   $('#ed-read').addEventListener('click', () => { persist(); readScript(editId); });
 
   // Teleprompter
-  $('#pr-close').addEventListener('click', () => { if (P.recording) stopRecording(); else go('/'); });
+  $('#pr-close').addEventListener('click', () => { if (P.recording) stopRecording(); else go(homeOf(getScript(P.id))); });
   $('#pr-restart').addEventListener('click', restart);
   $('#pr-play').addEventListener('click', togglePlay);
   $('#pr-rec').addEventListener('click', onRecord);
@@ -916,7 +1114,7 @@ function bind() {
     if (currentView !== 'prompter' || openSheets.length || e.target.matches('input, textarea, select')) return;
     if (e.key === ' ') { e.preventDefault(); togglePlay(); }
     else if (e.key === 'r' || e.key === 'R') onRecord();
-    else if (e.key === 'Escape') go('/');
+    else if (e.key === 'Escape') go(homeOf(getScript(P.id)));
     else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
       e.preventDefault();
       if (P.mode === 'auto') {

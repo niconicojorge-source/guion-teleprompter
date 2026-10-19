@@ -34,7 +34,7 @@ export function loadScripts() {
   return list;
 }
 
-export function saveScripts(list) { write(SCRIPTS_KEY, list); }
+export function saveScripts(list) { return write(SCRIPTS_KEY, list); }
 
 const LANGS = ['es-AR', 'es-ES', 'es-MX', 'es-US', 'en-US', 'pt-BR'];
 function guessLang() {

@@ -13,8 +13,8 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icons/icon-180.png">
   <link rel="icon" type="image/png" href="icons/icon-192.png">
-  <link rel="stylesheet" href="css/app.css?v=1.4">
-  <script type="module" src="js/app.js?v=1.4"></script>
+  <link rel="stylesheet" href="css/app.css?v=1.5">
+  <script type="module" src="js/app.js?v=1.5"></script>
 </head>
 <body>
 
@@ -22,9 +22,10 @@
   <section id="view-library" class="view">
     <div class="wrap">
       <header class="lib-header">
-        <h1>Guion</h1>
+        <h1 id="lib-title">Guion</h1>
         <button id="btn-import" class="icon-btn" aria-label="Importar archivo de texto"></button>
       </header>
+      <nav id="crumbs" class="crumbs" hidden></nav>
       <input id="search" class="search" type="search" placeholder="Buscar guiones" autocomplete="off">
       <div id="chips" class="chips" hidden></div>
       <ul id="script-list" class="script-list"></ul>
@@ -32,7 +33,7 @@
       <p id="version" class="version"></p>
     </div>
     <button id="btn-new" class="fab">+ Nuevo guion</button>
-    <input id="file-import" type="file" accept=".txt,.md,text/plain,text/markdown" multiple hidden>
+    <input id="file-import" type="file" accept=".xlsx,.txt,.md,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" multiple hidden>
   </section>
 
   <!-- Editor -->
@@ -40,6 +41,7 @@
     <header class="bar">
       <button id="ed-back" class="text-btn">‹ Guiones</button>
       <div class="bar-right">
+        <button id="ed-status" class="status-pill">Pendiente</button>
         <button id="ed-more" class="icon-btn" aria-label="Más opciones"></button>
         <button id="ed-read" class="pill-btn">Leer</button>
       </div>
@@ -48,6 +50,11 @@
       <input id="ed-title" class="ed-title" placeholder="Título" autocomplete="off">
       <input id="ed-cat" class="ed-cat" placeholder="Categoría (opcional)" list="cat-list" autocomplete="off">
       <datalist id="cat-list"></datalist>
+      <p id="ed-info" class="ed-info" hidden></p>
+      <details id="ed-details" class="ed-details" hidden>
+        <summary>Detalles de producción</summary>
+        <dl id="ed-dl"></dl>
+      </details>
       <textarea id="ed-text" placeholder="Escribí o pegá tu guion acá…"></textarea>
     </div>
     <footer id="ed-stats" class="ed-stats"></footer>

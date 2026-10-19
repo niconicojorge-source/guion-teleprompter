@@ -1,7 +1,7 @@
 // Red primero (para recibir siempre la última versión) y caché como respaldo sin conexión.
-const CACHE = 'guion-v5';
+const CACHE = 'guion-v6';
 const ASSETS = [
-  './', 'index.html', 'css/app.css', 'js/app.js', 'js/store.js', 'js/matcher.js', 'js/voice.js', 'js/camera.js',
+  './', 'index.html', 'css/app.css', 'js/app.js', 'js/store.js', 'js/matcher.js', 'js/voice.js', 'js/camera.js', 'js/xlsx.js',
   'manifest.webmanifest', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png',
 ];
 
