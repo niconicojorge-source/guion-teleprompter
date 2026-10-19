@@ -1,11 +1,11 @@
 // El ?v= de cada import hace que una versión nunca se mezcle con archivos viejos en caché.
-import { loadScripts, saveScripts, loadSettings, saveSettings, loadNiches, saveNiches, defaultSettings, LAYOUT_KEYS, uid } from './store.js?v=2.3';
-import { norm } from './matcher.js?v=2.3';
-import { VoiceFollower, voiceSupported, voiceLog, logVoice } from './voice.js?v=2.3';
-import { openCamera, Recorder, pickMime } from './camera.js?v=2.3';
-import { AudioBridge } from './audio.js?v=2.3';
+import { loadScripts, saveScripts, loadSettings, saveSettings, loadNiches, saveNiches, defaultSettings, LAYOUT_KEYS, uid } from './store.js?v=2.4';
+import { norm } from './matcher.js?v=2.4';
+import { VoiceFollower, voiceSupported, voiceLog, logVoice } from './voice.js?v=2.4';
+import { openCamera, Recorder, pickMime } from './camera.js?v=2.4';
+import { AudioBridge } from './audio.js?v=2.4';
 
-const VERSION = '2.3';
+const VERSION = '2.4';
 
 // ---------- Utilidades ----------
 const $ = (s, root = document) => root.querySelector(s);
@@ -532,21 +532,50 @@ function pickExcel(target) {
   $('#file-import').click();
 }
 
+// Acepta cualquier archivo y se fija qué es por su contenido, no solo por el nombre:
+// Excel (.xlsx), CSV, Word (.docx) o texto. Lo que no se puede leer explica cómo exportarlo.
 async function importFiles(files, target = null) {
-  const excel = files.filter((f) => /\.xlsx$/i.test(f.name));
-  const texts = files.filter((f) => !/\.xlsx$/i.test(f.name));
-  if (texts.length) {
+  const xlsx = () => import('./xlsx.js?v=2.4');
+  let texts = 0;
+  const addText = (name, text) => {
+    const now = Date.now();
     const date = lib.parts.length === 3 ? lib.parts.join('-') : '';
-    for (const f of texts) {
-      const now = Date.now();
-      const text = (await f.text()).replace(/\r\n?/g, '\n');
-      scripts.unshift({ id: uid(), title: f.name.replace(/\.[^.]+$/, ''), category: target || currentNiche(), text, date, done: false, createdAt: now, updatedAt: now });
+    scripts.unshift({ id: uid(), title: name.replace(/\.[^.]+$/, ''), category: target || currentNiche(), text: text.replace(/\r\n?/g, '\n'), date, done: false, createdAt: now, updatedAt: now });
+    texts++;
+  };
+  for (const f of files) {
+    try {
+      const head = new Uint8Array(await f.slice(0, 8).arrayBuffer());
+      const sig = String.fromCharCode(...head.slice(0, 4));
+      if (sig === 'PK\x03\x04') {
+        const { zipKind, readWorkbook, readDocx } = await xlsx();
+        const kind = await zipKind(f);
+        if (kind === 'xlsx') await importExcel(f, target, () => readWorkbook(f));
+        else if (kind === 'docx') addText(f.name, await readDocx(f));
+        else if (kind === 'iwork') toast(`"${f.name}" es de Numbers o Pages. Abrilo y exportalo como Excel (.xlsx) o CSV, y volvé a importarlo.`, 8000);
+        else toast(`No sé leer "${f.name}". Probá con un Excel (.xlsx), CSV, Word o texto.`, 6000);
+      } else if (head[0] === 0xd0 && head[1] === 0xcf && head[2] === 0x11 && head[3] === 0xe0) {
+        toast(`"${f.name}" es un Excel viejo (.xls). Abrilo y guardalo como .xlsx (o descargalo como .xlsx desde Google Sheets).`, 8000);
+      } else if (sig === '%PDF') {
+        toast('Los PDF no se pueden importar. Exportá el documento como Excel, Word o texto.', 7000);
+      } else if (/^(image|video|audio)\//.test(f.type)) {
+        toast(`"${f.name}" no es un documento. Elegí un Excel, CSV, Word o texto.`, 6000);
+      } else if (/\.(csv|tsv)$/i.test(f.name) || /csv|tab-separated/.test(f.type)) {
+        const { readCSV } = await xlsx();
+        const text = await f.text();
+        await importExcel(f, target, () => readCSV(text, f.name.replace(/\.[^.]+$/, '')));
+      } else {
+        addText(f.name, await f.text());
+      }
+    } catch (e) {
+      toast(`No pude leer "${f.name}": ${e.message}`, 6000);
     }
+  }
+  if (texts) {
     persist();
     renderLibrary();
-    toast(texts.length === 1 ? 'Guion importado' : `${texts.length} guiones importados`);
+    toast(texts === 1 ? 'Guion importado' : `${texts} guiones importados`);
   }
-  for (const f of excel) await importExcel(f, target);
 }
 
 // Los guiones del Excel se identifican por nicho + código: si importás de nuevo una versión
@@ -561,23 +590,40 @@ function importPlan(rows, target) {
   const base = (r) => excelKey(lineOf(r), r.code, r.date, r.time, r.title);
   const counts = new Map();
   for (const r of rows) counts.set(base(r), (counts.get(base(r)) || 0) + 1);
-  const keyFor = (r) => (counts.get(base(r)) > 1 ? `${base(r)}|${r.sheet}` : base(r));
+  const inSheet = new Map();
+  for (const r of rows) inSheet.set(`${base(r)}|${r.sheet}`, (inSheet.get(`${base(r)}|${r.sheet}`) || 0) + 1);
+  // Dos guiones iguales en la misma hoja (sin código ni fecha): se distinguen por su orden.
+  const nth = new Map();
+  let k = 0;
+  for (const r of rows) {
+    const b = `${base(r)}|${r.sheet}`;
+    if (inSheet.get(b) > 1) { k = (nth.get(b + '#') || 0) + 1; nth.set(b + '#', k); nth.set(r, `${b}|${k}`); }
+  }
+  const keyFor = (r) => nth.get(r) || (counts.get(base(r)) > 1 ? `${base(r)}|${r.sheet}` : base(r));
   const existing = new Map(scripts.filter((s) => s.source === 'excel').map((s) => [keyOfScript(s), s]));
   return { lineOf, keyFor, existing };
 }
 
-async function importExcel(file, target = null) {
-  toast('Leyendo el Excel…', 15000);
+async function importExcel(file, target, loadSheets) {
+  toast('Leyendo el archivo…', 15000);
   let rows;
+  let sheetList = [];
   try {
-    const { readWorkbook, scriptsFromWorkbook } = await import('./xlsx.js?v=2.3');
-    rows = scriptsFromWorkbook(await readWorkbook(file));
+    const { scriptsFromWorkbook } = await import('./xlsx.js?v=2.4');
+    sheetList = await loadSheets();
+    rows = scriptsFromWorkbook(sheetList);
   } catch (e) {
-    toast('No pude leer el Excel: ' + e.message, 6000);
+    toast('No pude leer el archivo: ' + e.message, 6000);
     return;
   }
   $('#toast').hidden = true;
-  if (!rows.length) { toast('No encontré ninguna columna "Guion" en ese Excel.', 6000); return; }
+  if (!rows.length) {
+    const names = sheetList.map((x) => `"${x.name}"`).join(', ');
+    toast(sheetList.length
+      ? `No encontré guiones en ${names}. Cada guion tiene que estar en una celda, en una columna (idealmente con el título "Guion").`
+      : 'El archivo no tiene hojas con datos.', 9000);
+    return;
+  }
 
   const sheets = [...groupBy(rows, (r) => r.sheet)].map(([name, list]) => {
     const dates = list.map((r) => r.date).filter(Boolean).sort();
@@ -588,11 +634,20 @@ async function importExcel(file, target = null) {
   sheet((sh, close) => {
     const go1 = h('button', { class: 'btn primary' });
     const info = h('p', { class: 'info' });
+    // Guiones sin fecha: se reparten en el calendario desde el día elegido, N por día.
+    const from = h('input', { type: 'date', class: 'ed-date', value: todayISO() });
+    const spread = h('div', { class: 'spread' },
+      h('p', { class: 'msg' }),
+      h('label', {}, 'Repartirlos desde el ', from));
+    const pending = (sel, plan) => sel.filter((r) => !r.date && !plan.existing.has(plan.keyFor(r)));
     const refresh = () => {
       const sel = rows.filter((r) => chosen.has(r.sheet));
       const plan = importPlan(sel, target);
       const updates = sel.filter((r) => plan.existing.has(plan.keyFor(r))).length;
       const done = sel.filter((r) => r.done).length;
+      const undated = pending(sel, plan);
+      spread.hidden = !undated.length;
+      spread.firstChild.textContent = `${undated.length === 1 ? '1 guion no tiene fecha' : `${undated.length} guiones no tienen fecha`}: los acomodo en el calendario, ${target ? perDay(target) : 3} por día, en el orden del archivo.`;
       go1.textContent = sel.length ? `Importar ${sel.length} guiones` : 'Elegí al menos una hoja';
       go1.disabled = !sel.length;
       info.textContent = [
@@ -601,31 +656,64 @@ async function importExcel(file, target = null) {
         updates ? `${updates} ya estaban en la app: se actualizan y conservan su estado.` : '',
       ].filter(Boolean).join(' ');
     };
-    go1.onclick = () => { close(); applyImport(rows.filter((r) => chosen.has(r.sheet)), target); };
+    go1.onclick = () => {
+      close();
+      const sel = rows.filter((r) => chosen.has(r.sheet));
+      applyImport(sel, target, from.value || todayISO());
+    };
     const multi = sheets.length > 1;
     sh.append(
       h('h2', {}, target ? `Importar a ${target}` : 'Importar Excel'),
       h('p', { class: 'msg' }, `Encontré ${rows.length} guiones en "${file.name}"${multi ? '. Elegí qué hojas importar:' : ':'}`),
       h('ul', { class: 'import-sum' + (multi ? ' pick' : '') }, sheets.map((s) => {
-        const text = [h('strong', {}, target ? s.name : s.line), ` · ${s.list.length} guiones · ${shortDate(s.from)} → ${shortDate(s.to)}`];
+        const text = [h('strong', {}, target ? s.name : s.line), ` · ${s.list.length} guiones${s.from ? ` · ${shortDate(s.from)} → ${shortDate(s.to)}` : ''}`];
         if (!multi) return h('li', {}, text);
         const cb = h('input', { type: 'checkbox', checked: true, onchange: (e) => { if (e.target.checked) chosen.add(s.name); else chosen.delete(s.name); refresh(); } });
         return h('li', {}, h('label', {}, cb, h('span', {}, text)));
       })),
+      spread,
       info,
       h('div', { class: 'sheet-actions' }, go1, h('button', { class: 'btn', onclick: () => close() }, 'Cancelar')));
     refresh();
   });
 }
 
-function applyImport(rows, target = null) {
+// Fechas para los guiones nuevos sin fecha: desde `start`, completando cada día hasta los
+// videos por día del nicho (contando los que ya hay ese día).
+function spreadDates(rows, lineOf, keyFor, existing, start) {
+  const used = new Map();
+  const count = (line, iso) => used.get(`${line}|${iso}`) || 0;
+  for (const s of scripts) if (s.date) used.set(`${s.category}|${s.date}`, count(s.category, s.date) + 1);
+  for (const r of rows) if (r.date && !existing.has(keyFor(r))) used.set(`${lineOf(r)}|${r.date}`, count(lineOf(r), r.date) + 1);
+  const next = (iso) => {
+    const d = new Date(iso + 'T12:00');
+    d.setDate(d.getDate() + 1);
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  };
+  const dates = new Map();
+  const day = new Map();
+  for (const r of rows) {
+    if (r.date || existing.has(keyFor(r))) continue;
+    const line = lineOf(r);
+    let iso = day.get(line) || start;
+    while (count(line, iso) >= perDay(line)) iso = next(iso);
+    used.set(`${line}|${iso}`, count(line, iso) + 1);
+    day.set(line, iso);
+    dates.set(r, iso);
+  }
+  return dates;
+}
+
+function applyImport(rows, target = null, start = todayISO()) {
   const { lineOf, keyFor, existing } = importPlan(rows, target);
+  const auto = spreadDates(rows, lineOf, keyFor, existing, start);
   const now = Date.now();
   let added = 0;
   for (const r of rows) {
     const key = keyFor(r);
-    const data = { title: r.title, category: lineOf(r), text: r.text, date: r.date, time: r.time, code: r.code, details: r.details, source: 'excel', xkey: key, updatedAt: now };
     const s = existing.get(key);
+    const date = r.date || s?.date || auto.get(r) || '';
+    const data = { title: r.title, category: lineOf(r), text: r.text, date, time: r.time, code: r.code, details: r.details, source: 'excel', xkey: key, updatedAt: now };
     if (s) Object.assign(s, data, { done: s.done || r.done });
     else { scripts.push({ id: uid(), createdAt: now, done: r.done, ...data }); added++; }
   }

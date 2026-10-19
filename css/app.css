@@ -362,3 +362,7 @@ button.cal-day.empty b { color: #6c6c7a; }
 .import-sum.pick { list-style: none; padding-left: 0; }
 .import-sum.pick label { display: flex; gap: 10px; align-items: flex-start; padding: 6px 0; }
 .import-sum.pick input { width: 20px; height: 20px; margin-top: 3px; accent-color: var(--accent); flex: none; }
+.spread { margin: 12px 0 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.spread[hidden] { display: none; }
+.spread p.msg { font-size: 14px; }
+.spread label { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 14px; color: #cfcfd6; }
