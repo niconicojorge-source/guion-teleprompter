@@ -48,7 +48,8 @@ function authError(body, status) {
       : /not.*confirmed/.test(raw) ? 'Todavía no confirmaste tu email. Revisá tu correo (y la carpeta de spam).'
         : /already.*(registered|exists)/.test(raw) ? 'Ya existe una cuenta con ese email. Entrá con tu contraseña.'
           : /password.*(at least|short|weak)|weak_password/.test(raw) ? 'La contraseña tiene que tener al menos 8 caracteres.'
-            : /rate|too many|security purposes/.test(raw) ? 'Demasiados intentos. Esperá un minuto y probá de nuevo.'
+            : /signups? not allowed|signup.*disabled/.test(raw) ? 'Por ahora no se pueden crear cuentas nuevas. Pedile a quien te pasó la app que te cree una.'
+          : /rate|too many|security purposes/.test(raw) ? 'Demasiados intentos. Esperá un minuto y probá de nuevo.'
               : /invalid.*email|email.*invalid/.test(raw) ? 'Ese email no es válido.'
                 : status >= 500 ? 'El servidor no responde. Probá de nuevo en un rato.'
                   : 'No se pudo completar. Revisá los datos y probá de nuevo.';
@@ -83,6 +84,15 @@ export async function signUp(email, password) {
   if (data.access_token) return keep(data);
   if (data.user?.identities?.length === 0 || data.identities?.length === 0) throw new Error('Ya existe una cuenta con ese email. Entrá con tu contraseña.');
   return null;
+}
+
+// ¿Está abierto el registro de cuentas nuevas? (si no, solo se entra con cuentas creadas por el dueño)
+export async function signupOpen() {
+  try {
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/settings`, { headers: { apikey: SUPABASE_KEY } });
+    const data = await res.json();
+    return !data.disable_signup;
+  } catch { return true; }
 }
 
 export async function resetPassword(email) {

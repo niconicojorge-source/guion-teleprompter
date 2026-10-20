@@ -128,6 +128,7 @@ export function defaultSettings() {
     countdown: 3,
     lang: guessLang(),
     showHeard: true,
+    lead: 2, // adelanto del texto en modo voz (0 = no, 3 = mucho)
   };
 }
 

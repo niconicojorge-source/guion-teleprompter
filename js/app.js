@@ -1,12 +1,12 @@
 // El ?v= de cada import hace que una versión nunca se mezcle con archivos viejos en caché.
-import { loadScripts, saveScripts, loadSettings, saveSettings, loadNiches, saveNiches as saveNichesLocal, defaultSettings, LAYOUT_KEYS, uid, setAccount, sampleScript, legacyData, markLegacyMigrated, dropLegacyIfMigrated, forgetAccount } from './store.js?v=2.9';
-import { cloudEnabled, currentUser, takeSessionFromUrl, signIn, signUp, signOut, resetPassword, setPassword, Sync } from './cloud.js?v=2.9';
-import { norm } from './matcher.js?v=2.9';
-import { VoiceFollower, voiceSupported, voiceLog, logVoice } from './voice.js?v=2.9';
-import { openCamera, Recorder, pickMime } from './camera.js?v=2.9';
-import { AudioBridge } from './audio.js?v=2.9';
+import { loadScripts, saveScripts, loadSettings, saveSettings, loadNiches, saveNiches as saveNichesLocal, defaultSettings, LAYOUT_KEYS, uid, setAccount, sampleScript, legacyData, markLegacyMigrated, dropLegacyIfMigrated, forgetAccount } from './store.js?v=3.0';
+import { cloudEnabled, currentUser, takeSessionFromUrl, signIn, signUp, signOut, resetPassword, setPassword, signupOpen, Sync } from './cloud.js?v=3.0';
+import { norm } from './matcher.js?v=3.0';
+import { VoiceFollower, voiceSupported, voiceLog, logVoice } from './voice.js?v=3.0';
+import { openCamera, Recorder, pickMime } from './camera.js?v=3.0';
+import { AudioBridge } from './audio.js?v=3.0';
 
-const VERSION = '2.9';
+const VERSION = '3.0';
 
 // ---------- Utilidades ----------
 const $ = (s, root = document) => root.querySelector(s);
@@ -689,7 +689,7 @@ function pickExcel(target) {
 // Acepta cualquier archivo y se fija qué es por su contenido, no solo por el nombre:
 // Excel (.xlsx), CSV, Word (.docx) o texto. Lo que no se puede leer explica cómo exportarlo.
 async function importFiles(files, target = null) {
-  const xlsx = () => import('./xlsx.js?v=2.9');
+  const xlsx = () => import('./xlsx.js?v=3.0');
   let texts = 0;
   const addText = (name, text) => {
     const now = Date.now();
@@ -764,7 +764,7 @@ async function importExcel(file, target, loadSheets) {
   let rows;
   let sheetList = [];
   try {
-    const { scriptsFromWorkbook } = await import('./xlsx.js?v=2.9');
+    const { scriptsFromWorkbook } = await import('./xlsx.js?v=3.0');
     sheetList = await loadSheets();
     rows = scriptsFromWorkbook(sheetList);
   } catch (e) {
@@ -1044,12 +1044,20 @@ function showLogin(notice = '') {
   };
   setMode('in');
   if (notice) say(notice, 'info');
+  const foot = h('p', { class: 'auth-foot' }, 'Cada cuenta es independiente: tus guiones solo los ves vos.');
   $('#login-card').replaceChildren(
     h('img', { class: 'auth-icon', src: 'icons/icon-192.png', alt: '' }),
     h('h1', { class: 'auth-title' }, 'Guion'),
     h('p', { class: 'auth-sub' }, 'Tu teleprompter y calendario de grabación'),
     form,
-    h('p', { class: 'auth-foot' }, 'Cada cuenta es independiente: tus guiones solo los ves vos.'));
+    foot);
+  // Registro cerrado (solo por invitación): no se ofrece "Crear cuenta".
+  signupOpen().then((open) => {
+    if (open) return;
+    if (mode === 'up') setMode('in');
+    tabs[1].parentNode.hidden = true;
+    foot.textContent = 'Acceso solo por invitación: pedile tu cuenta a quien te pasó la app.';
+  });
 }
 
 // Primera vez de una cuenta en este teléfono: si el teléfono tiene guiones de antes de las
@@ -1154,7 +1162,7 @@ const P = {
   y: 0, targetY: null, pos: -1, painted: -1, words: [], els: [],
   voice: null, stream: null, hasAudio: false, recorder: null,
   touching: false, fingerDown: false, manualTimer: 0,
-  heardAny: false, watchdog: 0,
+  heardAny: false, watchdog: 0, hist: [],
   raf: 0, last: 0, wake: null, cdTimer: 0, recTimer: 0, recStart: 0,
   errAt: {},
 };
@@ -1166,7 +1174,7 @@ function showPrompter(id) {
   setView('prompter');
   P.id = id;
   renderScript(getScript(id).text);
-  P.pos = -1; P.painted = -1; P.y = 0; P.targetY = 0;
+  P.pos = -1; P.painted = -1; P.y = 0; P.targetY = 0; P.hist = [];
   scroller().scrollTop = 0;
   applySettings();
   setMode(settings.mode, true);
@@ -1242,10 +1250,44 @@ function targetFor(pos) {
   return idx >= 0 ? Math.max(0, P.els[idx].offsetTop - readPx()) : 0;
 }
 
+// Adelanto: el reconocimiento de voz del iPhone entrega cada palabra con casi un segundo de
+// demora. Mientras leés de corrido, el texto sube como si ya hubieras dicho las palabras que
+// te da tiempo a decir en esa demora (según tu velocidad). Si frenás, no se adelanta más.
+const LEAD_SECONDS = [0, 0.6, 1.0, 1.5];
+function leadWords() {
+  const lat = LEAD_SECONDS[settings.lead ?? 2] || 0;
+  const now = performance.now();
+  P.hist = P.hist.filter((x) => now - x.t < 4000);
+  const h = P.hist;
+  if (!lat || h.length < 2 || now - h[h.length - 1].t > 1500) return 0;
+  const secs = (h[h.length - 1].t - h[0].t) / 1000;
+  if (secs < 0.4) return 1;
+  const rate = Math.min(5, (h[h.length - 1].pos - h[0].pos) / secs); // palabras por segundo
+  return Math.max(0, Math.min(8, Math.round(rate * lat)));
+}
+
+// Dónde debe quedar el texto en modo voz: adelantado, pero sin que la línea que estás
+// diciendo se vaya por arriba del recuadro.
+function voiceTarget(pos) {
+  const lead = leadWords();
+  let y = targetFor(Math.min(pos + lead, P.els.length - 1));
+  const cur = P.els[pos];
+  if (lead && cur) y = Math.min(y, Math.max(targetFor(pos), cur.offsetTop - settings.fontSize * 0.55));
+  return y;
+}
+
 function setPos(pos, fromUser = false) {
+  const prev = P.pos;
   P.pos = pos;
   paint(pos);
-  P.targetY = targetFor(pos);
+  if (fromUser || P.mode !== 'voice' || pos < prev) {
+    P.hist = [];
+    P.targetY = targetFor(pos);
+  } else {
+    P.hist.push({ t: performance.now(), pos });
+    // Nunca retrocede por el adelanto: solo si volvés atrás en el guion.
+    P.targetY = Math.max(P.targetY ?? 0, voiceTarget(pos));
+  }
   if (fromUser) {
     if (P.voice) { P.voice.pos = pos; P.voice.resetSession(); }
     if (P.mode !== 'voice') { P.y = P.targetY; scroller().scrollTop = P.y; }
@@ -1398,6 +1440,7 @@ function togglePlay() {
 }
 
 function restart() {
+  P.hist = [];
   P.pos = -1;
   paint(-1);
   P.y = 0;
@@ -1646,6 +1689,7 @@ const SETTINGS_UI = [
     key: 'lang', label: 'Idioma', type: 'select',
     options: [['es-AR', 'Español (Argentina)'], ['es-ES', 'Español (España)'], ['es-MX', 'Español (México)'], ['es-US', 'Español (EE. UU.)'], ['en-US', 'English (US)'], ['pt-BR', 'Português (Brasil)']],
   },
+  { key: 'lead', label: 'Adelanto del texto al leer', type: 'seg', options: [[0, 'No'], [1, 'Poco'], [2, 'Normal'], [3, 'Mucho']] },
   { key: 'showHeard', label: 'Mostrar lo que escucho', type: 'switch' },
   { action: 'Copiar registro de voz (para diagnóstico)', run: copyVoiceLog },
 ];
