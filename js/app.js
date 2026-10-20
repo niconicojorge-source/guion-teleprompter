@@ -1,12 +1,13 @@
 // El ?v= de cada import hace que una versión nunca se mezcle con archivos viejos en caché.
-import { loadScripts, saveScripts, loadSettings, saveSettings, loadNiches, saveNiches as saveNichesLocal, defaultSettings, LAYOUT_KEYS, uid, setAccount, sampleScript, legacyData, markLegacyMigrated, dropLegacyIfMigrated, forgetAccount } from './store.js?v=3.0';
-import { cloudEnabled, currentUser, takeSessionFromUrl, signIn, signUp, signOut, resetPassword, setPassword, signupOpen, Sync } from './cloud.js?v=3.0';
-import { norm } from './matcher.js?v=3.0';
-import { VoiceFollower, voiceSupported, voiceLog, logVoice } from './voice.js?v=3.0';
-import { openCamera, Recorder, pickMime } from './camera.js?v=3.0';
-import { AudioBridge } from './audio.js?v=3.0';
+import { loadScripts, saveScripts, loadSettings, saveSettings, loadNiches, saveNiches as saveNichesLocal, defaultSettings, LAYOUT_KEYS, uid, setAccount, sampleScript, legacyData, markLegacyMigrated, dropLegacyIfMigrated, forgetAccount } from './store.js?v=3.1';
+import { cloudEnabled, currentUser, takeSessionFromUrl, signIn, signUp, signOut, resetPassword, setPassword, signupOpen, Sync } from './cloud.js?v=3.1';
+import { norm } from './matcher.js?v=3.1';
+import { VoiceFollower, voiceSupported, voiceLog, logVoice } from './voice.js?v=3.1';
+import { openCamera, Recorder, pickMime } from './camera.js?v=3.1';
+import { AudioBridge } from './audio.js?v=3.1';
+import { createRenderer } from './editor.js?v=3.1';
 
-const VERSION = '3.0';
+const VERSION = '3.1';
 
 // ---------- Utilidades ----------
 const $ = (s, root = document) => root.querySelector(s);
@@ -34,6 +35,7 @@ const ICONS = {
   more: svg('<circle cx="5" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="19" cy="12" r="1.6" fill="currentColor"/>', 'stroke="none"'),
   import: svg('<path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 20h14"/>'),
   chevron: svg('<path d="M9.5 6l6 6-6 6"/>'),
+  check: svg('<path d="M5.5 12.5l4.2 4.2L18.5 8"/>', 'stroke-width="2.8"'),
   back: svg('<path d="M14.5 6l-6 6 6 6"/>', 'stroke-width="2.6"'),
   person: svg('<circle cx="12" cy="8.5" r="3.6"/><path d="M5 19.5c1.2-3.4 4-5 7-5s5.8 1.6 7 5"/>'),
   calendar: svg('<rect x="4" y="5" width="16" height="15" rx="2.5"/><path d="M4 10h16M8.5 3v4M15.5 3v4"/>'),
@@ -158,10 +160,10 @@ function route() {
   if (cloudEnabled && !currentUser()) return showLogin();
   const [, view, ...rest] = (location.hash.slice(1) || '/').split('/');
   const id = rest[0];
-  // Si se está grabando, no dejamos que un "atrás" corte la toma.
-  if (currentView === 'prompter' && P.recording && !(view === 'read' && id === P.id)) {
+  // Si se está grabando (o hay tomas en pausa), un "atrás" no las pierde: se abre el editor.
+  if (currentView === 'prompter' && (P.recording || P.session) && !(view === 'read' && id === P.id)) {
     go('/read/' + P.id);
-    stopRecording();
+    finishSession();
     return;
   }
   if (view === 'edit' && getScript(id)) return showEditor(id);
@@ -689,7 +691,7 @@ function pickExcel(target) {
 // Acepta cualquier archivo y se fija qué es por su contenido, no solo por el nombre:
 // Excel (.xlsx), CSV, Word (.docx) o texto. Lo que no se puede leer explica cómo exportarlo.
 async function importFiles(files, target = null) {
-  const xlsx = () => import('./xlsx.js?v=3.0');
+  const xlsx = () => import('./xlsx.js?v=3.1');
   let texts = 0;
   const addText = (name, text) => {
     const now = Date.now();
@@ -764,7 +766,7 @@ async function importExcel(file, target, loadSheets) {
   let rows;
   let sheetList = [];
   try {
-    const { scriptsFromWorkbook } = await import('./xlsx.js?v=3.0');
+    const { scriptsFromWorkbook } = await import('./xlsx.js?v=3.1');
     sheetList = await loadSheets();
     rows = scriptsFromWorkbook(sheetList);
   } catch (e) {
@@ -1190,6 +1192,8 @@ function closePrompter() {
   cancelCountdown();
   stopPrompting();
   if (P.recording) { P.recording = false; clearInterval(P.recTimer); P.recorder?.stop(); }
+  P.session = null;
+  renderRecState();
   P.bridge?.release();
   stopCamera();
   cancelAnimationFrame(P.raf);
@@ -1456,7 +1460,11 @@ function updateButtons() {
   const rec = $('#pr-rec');
   rec.classList.toggle('on', P.recording);
   rec.classList.toggle('counting', P.counting);
-  rec.setAttribute('aria-label', P.recording ? 'Detener grabación' : 'Grabar');
+  rec.setAttribute('aria-label', P.recording ? 'Pausar grabación' : P.session ? 'Seguir grabando' : 'Grabar');
+  // Con una sesión en curso, "Listo" ocupa el lugar de Ajustes.
+  const active = !!(P.recording || P.session);
+  $('#pr-done').hidden = !active;
+  $('#pr-settings').hidden = active;
 }
 
 // ---------- Cámara y grabación ----------
@@ -1517,10 +1525,12 @@ function voiceYield() {
   toast('El iPhone le estaba sacando el micrófono a la grabación: pausé el seguimiento por voz en esta toma para no perder el audio. Podés mover el texto con el dedo.', 8000);
 }
 
+// Una sesión de grabación junta varias tomas: cada vez que pausás y retomás empieza una
+// toma nueva. Con "Listo" se abre el editor para recortarlas y unirlas.
 async function onRecord() {
-  if (P.recording) return stopRecording();
-  if (P.counting) { cancelCountdown(); stopPrompting(); return; }
-  if (P.preparing) return;
+  if (P.recording) return pauseRecording();
+  if (P.counting) { cancelCountdown(); stopPrompting(); renderRecState(); return; }
+  if (P.preparing || P.finishing) return;
   if (!settings.camera) { toast('Activá la cámara en Ajustes para grabar.'); return; }
   // El audio de la toma se arma con Web Audio, que iOS solo deja arrancar dentro del toque.
   P.bridge ||= new AudioBridge({ log: logVoice, onFight: voiceYield });
@@ -1562,6 +1572,26 @@ function cancelCountdown() {
   updateButtons();
 }
 
+const sessionTime = () => (P.session?.clips || []).reduce((a, c) => a + c.duration, 0);
+
+// Cartel de arriba: grabando (toma y tiempo) o en pausa (cuántas tomas van).
+function renderRecState() {
+  const rt = $('#rec-time');
+  if (P.recording) {
+    const n = P.session.clips.length + 1;
+    rt.dataset.state = 'rec';
+    rt.textContent = `${n > 1 ? `Toma ${n} · ` : ''}${fmtClock((performance.now() - P.recStart) / 1000)}`;
+    rt.hidden = false;
+  } else if (P.session?.clips.length) {
+    const n = P.session.clips.length;
+    rt.dataset.state = 'paused';
+    rt.textContent = `En pausa · ${n} ${n === 1 ? 'toma' : 'tomas'} · ${fmtClock(sessionTime())}`;
+    rt.hidden = false;
+  } else {
+    rt.hidden = true;
+  }
+}
+
 function beginRecording() {
   if (currentView !== 'prompter' || !P.stream) return;
   try {
@@ -1576,13 +1606,12 @@ function beginRecording() {
     stopPrompting();
     return;
   }
+  P.session ||= { clips: [] };
   P.recording = true;
   P.recStart = performance.now();
   if (P.voice) P.voice.gentle = true;
-  const rt = $('#rec-time');
-  rt.textContent = '00:00';
-  rt.hidden = false;
-  P.recTimer = setInterval(() => { rt.textContent = fmtClock((performance.now() - P.recStart) / 1000); }, 250);
+  renderRecState();
+  P.recTimer = setInterval(renderRecState, 250);
   if (P.mode !== 'manual') {
     P.playing = true;
     P.y = scroller().scrollTop;
@@ -1591,63 +1620,312 @@ function beginRecording() {
   updateButtons();
 }
 
-async function stopRecording() {
+// Cierra la toma en curso (pausa). El texto se queda donde ibas.
+async function pauseRecording() {
   if (!P.recording) return;
   P.recording = false;
   clearInterval(P.recTimer);
-  $('#rec-time').hidden = true;
   const duration = (performance.now() - P.recStart) / 1000;
   P.bridge.stop();
   const silent = P.bridge.silentRatio();
-  logVoice('rec', `fin · micrófono: ${audioState(P.bridge.track)} · silencio del sistema: ${Math.round(silent * 100)}%`);
+  logVoice('rec', `fin de toma · micrófono: ${audioState(P.bridge.track)} · silencio del sistema: ${Math.round(silent * 100)}%`);
   if (P.voice) P.voice.gentle = false;
   // Primero se cierra la grabación y después se corta la voz (cortarla puede silenciar el micrófono).
   const pending = P.recorder.stop();
   stopPrompting();
   const blob = await pending;
   P.recorder = null;
-  P.bridge.release();
-  if (!blob.size) { toast('La grabación quedó vacía. Probá de nuevo.'); return; }
-  showTake(blob, duration, silent);
+  if (blob.size) P.session.clips.push({ blob, duration, silent });
+  else toast('Esa toma quedó vacía.');
+  renderRecState();
+  updateButtons();
 }
 
-function showTake(blob, duration, silent = 0) {
+// "Listo": termina la sesión y abre el editor con todas las tomas.
+async function finishSession() {
+  if (P.finishing) return;
+  P.finishing = true;
+  try {
+    if (P.counting) { cancelCountdown(); stopPrompting(); }
+    await pauseRecording();
+    const clips = P.session?.clips || [];
+    P.session = null;
+    P.bridge?.release();
+    renderRecState();
+    updateButtons();
+    if (clips.length) openTakeEditor(clips);
+  } finally {
+    P.finishing = false;
+  }
+}
+
+const fmtTime = (t) => `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, '0')}`;
+
+// Editor de tomas: ver cada una, descartarla o recortarle el principio y el final, y
+// guardar todo unido (o cada toma por separado).
+function openTakeEditor(clips) {
   const s = getScript(P.id);
-  const ext = /mp4/.test(blob.type) ? 'mp4' : 'webm';
-  const name = `${slug(s?.title || 'toma')}-${stamp()}.${ext}`;
-  const url = URL.createObjectURL(blob);
-  const canShare = !!navigator.canShare?.({ files: [new File([blob], name, { type: blob.type.split(';')[0] })] });
+  const items = clips.map((c, i) => ({ ...c, n: i + 1, url: URL.createObjectURL(c.blob), start: 0, end: c.duration, dur: c.duration, keep: true }));
+  let sel = items[0];
   let saved = false;
+  let renderer = null;
+  const outUrls = [];
 
   sheet((sh, close) => {
-    const askClose = async () => {
-      if (saved || (await confirmSheet('No guardaste esta toma. ¿Descartarla?', 'Descartar'))) close();
-    };
-    const closeBtn = h('button', { class: 'btn', onclick: askClose }, 'Cerrar sin guardar');
-    const markSaved = () => { saved = true; closeBtn.textContent = 'Cerrar'; };
-    sh.append(
-      h('h2', {}, 'Tu toma'),
-      h('video', {
-        class: 'take-video', src: url, controls: true, playsinline: true,
-        // Safari informa las pistas de audio del archivo: si no hay, avisamos ya.
-        onloadedmetadata: (e) => {
-          const at = e.currentTarget.audioTracks;
-          if (at && at.length === 0) {
-            logVoice('rec', 'la toma quedó SIN pista de audio');
-            e.currentTarget.after(h('p', { class: 'warn' }, '⚠︎ Esta toma quedó sin sonido. Volvé a grabarla; si se repite, copiame el registro de voz desde Ajustes.'));
-          }
+    sh.classList.add('take-editor');
+    const player = h('video', { class: 'take-video', playsinline: true, controls: true, preload: 'auto' });
+    const warn = h('div', {});
+    const strip = h('div', { class: 'tk-strip' });
+    const summary = h('p', { class: 'tk-sum' });
+    const range = h('div', { class: 'trim-sel' });
+    const head = h('div', { class: 'trim-head' });
+    const hl = h('button', { class: 'trim-h l', 'aria-label': 'Inicio del recorte' });
+    const hr = h('button', { class: 'trim-h r', 'aria-label': 'Final del recorte' });
+    const track = h('div', { class: 'trim' }, range, head, hl, hr);
+    const trimInfo = h('p', { class: 'trim-info' });
+    const discardBtn = h('button', { class: 'btn tk-discard' });
+    const trimBox = h('div', { class: 'trim-box' },
+      h('div', { class: 'trim-top' }, h('strong', { class: 'trim-title' }), h('button', { class: 'tk-preview', onclick: () => previewRange() }, '▶︎ Ver recorte')),
+      track, trimInfo, discardBtn);
+    const actions = h('div', { class: 'sheet-actions' });
+    let previewing = false;
+    let result = null; // archivos listos para guardar (mientras se muestran, no se repinta la edición)
+
+    const kept = () => items.filter((it) => it.keep);
+    const trimmed = (it) => it.start > 0.05 || it.end < it.dur - 0.05;
+
+    function paintStrip() {
+      strip.replaceChildren(...items.map((it) => h('button', {
+        class: 'tk-card' + (it === sel ? ' on' : '') + (it.keep ? '' : ' off'),
+        onclick: () => select(it),
+      },
+      h('strong', {}, `Toma ${it.n}`),
+      h('span', {}, it.keep ? fmtClock(it.end - it.start) + (trimmed(it) ? ' ✂︎' : '') : 'Descartada'),
+      it.silent > 0.5 ? h('em', {}, 'sin sonido') : null)));
+      const k = kept();
+      summary.textContent = k.length
+        ? `Video final: ${k.length} ${k.length === 1 ? 'toma' : 'tomas'} · ${fmtClock(k.reduce((a, it) => a + it.end - it.start, 0))}`
+        : 'Descartaste todas las tomas.';
+      paintActions();
+    }
+
+    function paintTrim() {
+      const d = sel.dur || 1;
+      const l = (sel.start / d) * 100;
+      const r = (sel.end / d) * 100;
+      range.style.left = l + '%';
+      range.style.width = Math.max(0, r - l) + '%';
+      hl.style.left = l + '%';
+      hr.style.left = r + '%';
+      trimBox.querySelector('.trim-title').textContent = `Toma ${sel.n}`;
+      trimInfo.textContent = `Desde ${fmtTime(sel.start)} hasta ${fmtTime(sel.end)} · queda ${fmtTime(sel.end - sel.start)}`;
+      discardBtn.textContent = sel.keep ? 'Descartar esta toma' : 'Recuperar esta toma';
+      discardBtn.classList.toggle('danger', sel.keep);
+      track.classList.toggle('off', !sel.keep);
+      warn.replaceChildren(sel.silent > 0.5
+        ? h('p', { class: 'warn' }, '⚠︎ El iPhone silenció el micrófono en esta toma. Escuchala antes de usarla.')
+        : sel.silent > 0.08 ? h('p', { class: 'warn' }, `⚠︎ Esta toma tuvo cortes de sonido (~${Math.round(sel.silent * sel.duration)} s).`) : '');
+    }
+
+    function paintHead() {
+      head.style.left = ((player.currentTime || 0) / (sel.dur || 1)) * 100 + '%';
+    }
+
+    function select(it) {
+      sel = it;
+      result = null;
+      trimBox.hidden = strip.hidden = summary.hidden = false;
+      previewing = false;
+      player.src = it.url;
+      paintStrip();
+      paintTrim();
+    }
+
+    player.addEventListener('loadedmetadata', () => {
+      if (result || player.src !== sel.url) return; // está mostrando el video ya armado
+      const d = player.duration;
+      // Safari sabe la duración real; si no, queda la medida al grabar.
+      if (Number.isFinite(d) && d > 0) {
+        if (sel.end >= sel.dur - 0.05 || sel.end > d) sel.end = d;
+        sel.dur = d;
+        paintTrim();
+        paintStrip();
+      }
+      if (player.audioTracks && player.audioTracks.length === 0) {
+        logVoice('rec', `la toma ${sel.n} quedó SIN pista de audio`);
+        sel.silent = 1;
+        paintTrim();
+      }
+    });
+    player.addEventListener('timeupdate', () => {
+      if (result) return;
+      paintHead();
+      if (previewing && player.currentTime >= sel.end - 0.03) { player.pause(); previewing = false; }
+    });
+    player.addEventListener('seeked', paintHead);
+
+    function previewRange() {
+      previewing = true;
+      player.currentTime = sel.start;
+      player.play().catch(() => {});
+    }
+
+    // Manijas del recorte: se arrastran con el dedo; el video muestra ese momento.
+    for (const [handle, side] of [[hl, 'l'], [hr, 'r']]) {
+      const move = (e) => {
+        const box = track.getBoundingClientRect();
+        const t = Math.max(0, Math.min(1, (e.clientX - box.left) / box.width)) * sel.dur;
+        if (side === 'l') sel.start = Math.min(t, sel.end - 0.5);
+        else sel.end = Math.max(t, sel.start + 0.5);
+        sel.start = Math.max(0, sel.start);
+        sel.end = Math.min(sel.dur, sel.end);
+        player.pause();
+        previewing = false;
+        player.currentTime = side === 'l' ? sel.start : sel.end;
+        paintTrim();
+      };
+      handle.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        handle.setPointerCapture(e.pointerId);
+        handle.classList.add('drag');
+        handle.onpointermove = move;
+        move(e);
+      });
+      const end = () => { handle.onpointermove = null; handle.classList.remove('drag'); paintStrip(); };
+      handle.addEventListener('pointerup', end);
+      handle.addEventListener('pointercancel', end);
+      // Con teclado: flechas mueven de a una décima de segundo.
+      handle.addEventListener('keydown', (e) => {
+        const dir = e.key === 'ArrowRight' ? 0.1 : e.key === 'ArrowLeft' ? -0.1 : 0;
+        if (!dir) return;
+        e.preventDefault();
+        if (side === 'l') sel.start = Math.max(0, Math.min(sel.start + dir, sel.end - 0.5));
+        else sel.end = Math.min(sel.dur, Math.max(sel.end + dir, sel.start + 0.5));
+        player.currentTime = side === 'l' ? sel.start : sel.end;
+        paintTrim();
+        paintStrip();
+      });
+    }
+
+    discardBtn.onclick = () => { sel.keep = !sel.keep; paintTrim(); paintStrip(); };
+
+    const ext = (b) => (/mp4/.test(b.type) ? 'mp4' : 'webm');
+    const fileName = (b, suffix = '') => `${slug(s?.title || 'toma')}${suffix}-${stamp()}.${ext(b)}`;
+    const toFile = (b, suffix) => new File([b], fileName(b, suffix), { type: b.type.split(';')[0] });
+
+    function saveButtons(files) {
+      const canShare = !!navigator.canShare?.({ files });
+      return [
+        h('button', {
+          class: 'btn primary',
+          onclick: async () => {
+            if (canShare) {
+              try { await navigator.share({ files, title: s?.title }); saved = true; } catch (e) { if (e.name !== 'AbortError') files.forEach((f) => download(f, f.name)); else return; saved = true; }
+            } else { files.forEach((f) => download(f, f.name)); saved = true; }
+            paintActions();
+          },
+        }, canShare ? (files.length > 1 ? `Guardar las ${files.length} tomas en Fotos / Compartir` : 'Guardar en Fotos / Compartir') : files.length > 1 ? 'Descargar las tomas' : 'Descargar video'),
+      ];
+    }
+
+    // Une las tomas que quedaron (o cada una por separado) y muestra el resultado para guardarlo.
+    async function build(separate) {
+      const k = kept();
+      if (!k.length) { toast('Descartaste todas las tomas. Recuperá alguna para guardar.'); return; }
+      // Una sola toma sin recortes: se guarda tal cual, sin volver a procesarla.
+      const simple = separate ? k.every((it) => !trimmed(it)) : k.length === 1 && !trimmed(k[0]);
+      if (simple) { showResult(k.map((it, i) => toFile(it.blob, separate && k.length > 1 ? `-toma${i + 1}` : ''))); return; }
+      player.pause();
+      renderer?.dispose();
+      renderer = createRenderer(k[0].url); // dentro del toque: iOS lo exige
+      const bar = h('i');
+      const label = h('span', {}, 'Preparando…');
+      actions.replaceChildren(
+        h('div', { class: 'render' }, h('div', { class: 'render-bar' }, bar), label),
+        h('p', { class: 'info' }, 'Armando tu video en el teléfono. Tarda lo mismo que dura el video: no cierres la app.'),
+        h('button', { class: 'btn', onclick: () => renderer?.cancel() }, 'Cancelar'));
+      requestWake();
+      try {
+        const jobs = separate ? k.map((it) => [it]) : [k];
+        const total = jobs.length;
+        const files = [];
+        for (let j = 0; j < total; j++) {
+          const blob = await renderer.run(jobs[j].map((it) => ({ url: it.url, start: it.start, end: it.end })), (f) => {
+            const pctv = Math.round(((j + f) / total) * 100);
+            bar.style.width = pctv + '%';
+            label.textContent = `${total > 1 ? `Toma ${j + 1} de ${total} · ` : ''}${pctv}%`;
+          });
+          if (!blob) { toast('Cancelado.'); paintActions(); return; }
+          files.push(toFile(blob, separate && total > 1 ? `-toma${j + 1}` : ''));
+        }
+        showResult(files);
+      } catch (e) {
+        logVoice('rec', `error al unir: ${e.message}`);
+        toast('No pude armar el video: ' + e.message + ' Probá guardar las tomas por separado.', 7000);
+        paintActions();
+      } finally {
+        renderer?.dispose();
+        renderer = null;
+      }
+    }
+
+    function showResult(files) {
+      const first = files[0];
+      const url = URL.createObjectURL(first);
+      outUrls.push(url);
+      result = files;
+      previewing = false;
+      trimBox.hidden = strip.hidden = summary.hidden = true;
+      warn.replaceChildren();
+      player.src = url;
+      const size = files.reduce((a, f) => a + f.size, 0) / 1048576;
+      actions.replaceChildren(...[
+        h('p', { class: 'tk-done' }, files.length > 1 ? `✓ Listas ${files.length} tomas · ${size.toFixed(1)} MB` : `✓ Video listo · ${size.toFixed(1)} MB`),
+        ...saveButtons(files),
+        h('button', { class: 'btn', onclick: () => { select(sel); } }, 'Volver a editar'),
+        doneBtn(),
+        closeBtn()].filter(Boolean));
+    }
+
+    function doneBtn() {
+      return s && !s.done ? h('button', { class: 'btn ok', onclick: (e) => { setDone(s, true); e.currentTarget.textContent = '✓ Guion marcado como hecho'; e.currentTarget.disabled = true; } }, 'Marcar guion como hecho') : null;
+    }
+
+    function closeBtn() {
+      return h('button', {
+        class: 'btn',
+        onclick: async () => {
+          if (saved || (await confirmSheet('No guardaste el video. ¿Descartar las tomas?', 'Descartar'))) close();
         },
-      }),
-      h('p', { class: 'info' }, `${fmtClock(duration)} · ${(blob.size / 1048576).toFixed(1)} MB · ${ext.toUpperCase()}`),
-      silent > 0.5 ? h('p', { class: 'warn' }, '⚠︎ El iPhone silenció el micrófono durante casi toda la toma. Volvé a grabarla; si se repite, copiame el registro de voz desde Ajustes.')
-        : silent > 0.08 ? h('p', { class: 'warn' }, `⚠︎ La toma tuvo cortes de sonido (~${Math.round(silent * duration)} s). Escuchala antes de guardarla.`) : null,
-      h('div', { class: 'sheet-actions' },
-        h('button', { class: 'btn primary', onclick: async () => { if (await shareOrDownload(blob, name, s?.title)) markSaved(); } },
-          canShare ? 'Guardar en Fotos / Compartir' : 'Descargar video'),
-        canShare ? h('button', { class: 'btn', onclick: () => { download(blob, name); markSaved(); } }, 'Descargar archivo') : null,
-        s && !s.done ? h('button', { class: 'btn ok', onclick: (e) => { setDone(s, true); e.currentTarget.textContent = '✓ Guion marcado como hecho'; e.currentTarget.disabled = true; } }, 'Marcar guion como hecho') : null,
-        closeBtn));
-  }, { dismissable: false, onClose: () => URL.revokeObjectURL(url) });
+      }, saved ? 'Cerrar' : 'Cerrar sin guardar');
+    }
+
+    function paintActions() {
+      if (renderer || result) return;
+      const k = kept();
+      actions.replaceChildren(...[
+        h('button', { class: 'btn primary', disabled: !k.length, onclick: () => build(false) }, k.length > 1 ? 'Unir y guardar video' : 'Guardar video'),
+        k.length > 1 ? h('button', { class: 'btn', onclick: () => build(true) }, 'Guardar las tomas por separado') : null,
+        doneBtn(),
+        closeBtn()].filter(Boolean));
+    }
+
+    sh.append(
+      h('h2', {}, items.length > 1 ? `Tus ${items.length} tomas` : 'Tu toma'),
+      player, warn,
+      items.length > 1 ? strip : null,
+      summary,
+      trimBox,
+      actions);
+    select(sel);
+  }, {
+    dismissable: false,
+    onClose: () => {
+      renderer?.dispose();
+      items.forEach((it) => URL.revokeObjectURL(it.url));
+      outUrls.forEach((u) => URL.revokeObjectURL(u));
+    },
+  });
 }
 
 async function requestWake() {
@@ -1854,7 +2132,9 @@ function bind() {
   $('#ed-read').addEventListener('click', () => { persist(); readScript(editId); });
 
   // Teleprompter
-  $('#pr-close').addEventListener('click', () => { if (P.recording) stopRecording(); else go(homeOf(getScript(P.id))); });
+  $('#pr-close').addEventListener('click', () => { if (P.recording || P.session) finishSession(); else go(homeOf(getScript(P.id))); });
+  $('#pr-done').innerHTML = ICONS.check;
+  $('#pr-done').addEventListener('click', finishSession);
   $('#pr-restart').addEventListener('click', restart);
   $('#pr-play').addEventListener('click', togglePlay);
   $('#pr-rec').addEventListener('click', onRecord);
@@ -1884,7 +2164,7 @@ function bind() {
     if (document.visibilityState === 'hidden') flush();
     if (currentView !== 'prompter') return;
     if (document.visibilityState === 'hidden') {
-      if (P.recording) stopRecording();
+      if (P.recording) pauseRecording(); // queda en pausa: al volver, seguís o tocás Listo
       return;
     }
     requestWake();
