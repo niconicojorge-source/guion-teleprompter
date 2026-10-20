@@ -1,12 +1,12 @@
 // El ?v= de cada import hace que una versión nunca se mezcle con archivos viejos en caché.
-import { loadScripts, saveScripts, loadSettings, saveSettings, loadNiches, saveNiches as saveNichesLocal, defaultSettings, LAYOUT_KEYS, uid, setAccount, sampleScript, legacyData, markLegacyMigrated, dropLegacyIfMigrated, forgetAccount } from './store.js?v=2.8';
-import { cloudEnabled, currentUser, takeSessionFromUrl, signIn, signUp, signOut, resetPassword, setPassword, Sync } from './cloud.js?v=2.8';
-import { norm } from './matcher.js?v=2.8';
-import { VoiceFollower, voiceSupported, voiceLog, logVoice } from './voice.js?v=2.8';
-import { openCamera, Recorder, pickMime } from './camera.js?v=2.8';
-import { AudioBridge } from './audio.js?v=2.8';
+import { loadScripts, saveScripts, loadSettings, saveSettings, loadNiches, saveNiches as saveNichesLocal, defaultSettings, LAYOUT_KEYS, uid, setAccount, sampleScript, legacyData, markLegacyMigrated, dropLegacyIfMigrated, forgetAccount } from './store.js?v=2.9';
+import { cloudEnabled, currentUser, takeSessionFromUrl, signIn, signUp, signOut, resetPassword, setPassword, Sync } from './cloud.js?v=2.9';
+import { norm } from './matcher.js?v=2.9';
+import { VoiceFollower, voiceSupported, voiceLog, logVoice } from './voice.js?v=2.9';
+import { openCamera, Recorder, pickMime } from './camera.js?v=2.9';
+import { AudioBridge } from './audio.js?v=2.9';
 
-const VERSION = '2.8';
+const VERSION = '2.9';
 
 // ---------- Utilidades ----------
 const $ = (s, root = document) => root.querySelector(s);
@@ -689,7 +689,7 @@ function pickExcel(target) {
 // Acepta cualquier archivo y se fija qué es por su contenido, no solo por el nombre:
 // Excel (.xlsx), CSV, Word (.docx) o texto. Lo que no se puede leer explica cómo exportarlo.
 async function importFiles(files, target = null) {
-  const xlsx = () => import('./xlsx.js?v=2.8');
+  const xlsx = () => import('./xlsx.js?v=2.9');
   let texts = 0;
   const addText = (name, text) => {
     const now = Date.now();
@@ -764,7 +764,7 @@ async function importExcel(file, target, loadSheets) {
   let rows;
   let sheetList = [];
   try {
-    const { scriptsFromWorkbook } = await import('./xlsx.js?v=2.8');
+    const { scriptsFromWorkbook } = await import('./xlsx.js?v=2.9');
     sheetList = await loadSheets();
     rows = scriptsFromWorkbook(sheetList);
   } catch (e) {

@@ -7,8 +7,8 @@
 
 // Datos públicos del proyecto (la clave "anon/publishable" está pensada para ir en la app).
 // Vacíos = la app funciona como antes, sin cuentas.
-export const SUPABASE_URL = '';
-export const SUPABASE_KEY = '';
+export const SUPABASE_URL = 'https://yukecuffdzzczgikppdp.supabase.co';
+export const SUPABASE_KEY = 'sb_publishable_uxq5vfB4CnIHZtwWH3pKqA_RLCrPTf5';
 export const cloudEnabled = !!(SUPABASE_URL && SUPABASE_KEY);
 
 const SESSION_KEY = 'guion.session.v1';
