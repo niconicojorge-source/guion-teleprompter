@@ -1,11 +1,12 @@
 // El ?v= de cada import hace que una versión nunca se mezcle con archivos viejos en caché.
-import { loadScripts, saveScripts, loadSettings, saveSettings, loadNiches, saveNiches, defaultSettings, LAYOUT_KEYS, uid } from './store.js?v=2.7';
-import { norm } from './matcher.js?v=2.7';
-import { VoiceFollower, voiceSupported, voiceLog, logVoice } from './voice.js?v=2.7';
-import { openCamera, Recorder, pickMime } from './camera.js?v=2.7';
-import { AudioBridge } from './audio.js?v=2.7';
+import { loadScripts, saveScripts, loadSettings, saveSettings, loadNiches, saveNiches as saveNichesLocal, defaultSettings, LAYOUT_KEYS, uid, setAccount, sampleScript, legacyData, markLegacyMigrated, dropLegacyIfMigrated, forgetAccount } from './store.js?v=2.8';
+import { cloudEnabled, currentUser, takeSessionFromUrl, signIn, signUp, signOut, resetPassword, setPassword, Sync } from './cloud.js?v=2.8';
+import { norm } from './matcher.js?v=2.8';
+import { VoiceFollower, voiceSupported, voiceLog, logVoice } from './voice.js?v=2.8';
+import { openCamera, Recorder, pickMime } from './camera.js?v=2.8';
+import { AudioBridge } from './audio.js?v=2.8';
 
-const VERSION = '2.7';
+const VERSION = '2.8';
 
 // ---------- Utilidades ----------
 const $ = (s, root = document) => root.querySelector(s);
@@ -34,6 +35,7 @@ const ICONS = {
   import: svg('<path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 20h14"/>'),
   chevron: svg('<path d="M9.5 6l6 6-6 6"/>'),
   back: svg('<path d="M14.5 6l-6 6 6 6"/>', 'stroke-width="2.6"'),
+  person: svg('<circle cx="12" cy="8.5" r="3.6"/><path d="M5 19.5c1.2-3.4 4-5 7-5s5.8 1.6 7 5"/>'),
   calendar: svg('<rect x="4" y="5" width="16" height="15" rx="2.5"/><path d="M4 10h16M8.5 3v4M15.5 3v4"/>'),
   list: svg('<path d="M9 6.5h11M9 12h11M9 17.5h11"/><circle cx="4.8" cy="6.5" r="1" fill="currentColor"/><circle cx="4.8" cy="12" r="1" fill="currentColor"/><circle cx="4.8" cy="17.5" r="1" fill="currentColor"/>'),
 };
@@ -103,6 +105,11 @@ function confirmSheet(msg, okLabel) {
 }
 
 // ---------- Datos ----------
+// Con cuentas: cada cuenta tiene sus datos aparte en el teléfono y en el servidor.
+const urlAuth = takeSessionFromUrl();
+const me = cloudEnabled ? currentUser() : null;
+setAccount(me?.id);
+let sync = null;
 let scripts = loadScripts();
 let settings = loadSettings();
 let currentView = null;
@@ -111,6 +118,7 @@ let currentView = null;
 let fullWarnAt = 0;
 const persist = () => {
   const ok = saveScripts(scripts);
+  sync?.schedule();
   if (!ok && Date.now() - fullWarnAt > 8000) {
     fullWarnAt = Date.now();
     toast('⚠︎ No pude guardar: este dispositivo se quedó sin espacio. Lo último que cambiaste puede perderse.', 7000);
@@ -147,6 +155,7 @@ function go(path) { location.hash = path; }
 const homeOf = (s) => (inList(s) ? nicheBase(nicheKey(s.category)) : s?.date ? `${nicheBase(nicheKey(s.category))}/${s.date.split('-').join('/')}` : scripts.some((x) => x.date) ? '/o' : '/');
 
 function route() {
+  if (cloudEnabled && !currentUser()) return showLogin();
   const [, view, ...rest] = (location.hash.slice(1) || '/').split('/');
   const id = rest[0];
   // Si se está grabando, no dejamos que un "atrás" corte la toma.
@@ -188,6 +197,11 @@ const currentNiche = () => (lib.niche && lib.niche !== '_' ? lib.niche : '');
 
 // Nichos: lista propia (así puede haber nichos vacíos) + los que aparezcan en guiones con fecha.
 let niches = loadNiches();
+function saveNiches(list) {
+  const ok = saveNichesLocal(list);
+  sync?.schedule();
+  return ok;
+}
 function syncNiches() {
   const names = new Set(niches.map((n) => n.name));
   let changed = false;
@@ -244,6 +258,7 @@ function showLibrary(state = {}) {
 function renderLibrary() {
   syncNiches();
   $('#version').textContent = `Guion v${VERSION}` + (voiceSupported ? '' : ' · sin reconocimiento de voz en este navegador');
+  renderSyncState();
   const q = fold($('#search').value.trim());
   const { niche, parts, other } = lib;
   const dated = scripts.filter((s) => s.date);
@@ -674,7 +689,7 @@ function pickExcel(target) {
 // Acepta cualquier archivo y se fija qué es por su contenido, no solo por el nombre:
 // Excel (.xlsx), CSV, Word (.docx) o texto. Lo que no se puede leer explica cómo exportarlo.
 async function importFiles(files, target = null) {
-  const xlsx = () => import('./xlsx.js?v=2.7');
+  const xlsx = () => import('./xlsx.js?v=2.8');
   let texts = 0;
   const addText = (name, text) => {
     const now = Date.now();
@@ -749,7 +764,7 @@ async function importExcel(file, target, loadSheets) {
   let rows;
   let sheetList = [];
   try {
-    const { scriptsFromWorkbook } = await import('./xlsx.js?v=2.7');
+    const { scriptsFromWorkbook } = await import('./xlsx.js?v=2.8');
     sheetList = await loadSheets();
     rows = scriptsFromWorkbook(sheetList);
   } catch (e) {
@@ -880,6 +895,196 @@ function applyImport(rows, target = null, start = todayISO(), layout = 'calendar
   toast(`Listo: ${added} guiones nuevos${rows.length - added ? ` y ${rows.length - added} actualizados` : ''}.`, 4000);
   const dest = target ? nicheBase(target) : '/';
   if ((location.hash.slice(1) || '/') === dest) renderLibrary(); else go(dest);
+}
+
+// ---------- Cuenta y sincronización ----------
+const SYNC_TEXT = {
+  ok: 'Todo guardado en tu cuenta',
+  syncing: 'Sincronizando…',
+  pending: 'Hay cambios por subir',
+  offline: 'Sin internet: se sube cuando vuelva',
+  error: 'No se pudo sincronizar, reintento en un rato',
+  expired: 'La sesión venció',
+};
+
+function startSync() {
+  sync = new Sync({
+    uid: me.id,
+    getScripts: () => scripts,
+    setScripts: (list) => { scripts = list; saveScripts(scripts); },
+    getNiches: () => niches,
+    setNiches: (list) => { niches = list; saveNichesLocal(list); },
+    onStatus: (st) => { renderSyncState(); if (st === 'ok') dropLegacyIfMigrated(me.id); },
+    onChange: () => {
+      if (currentView === 'library') renderLibrary();
+      else if (currentView === 'editor' && !getScript(editId)) go('/');
+    },
+    onExpired: () => { toast('Tu sesión venció. Volvé a entrar con tu email y contraseña.', 6000); showLogin(); },
+  });
+  sync.run();
+  // Al volver a la app o recuperar internet, se trae lo nuevo de otros dispositivos.
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') sync.schedule(200); });
+  window.addEventListener('online', () => sync.schedule(200));
+  setInterval(() => { if (document.visibilityState === 'visible' && !P.recording) sync.schedule(0); }, 120000);
+}
+
+function renderSyncState() {
+  const el = $('#sync-state');
+  if (!el) return;
+  el.hidden = !sync;
+  if (!sync) return;
+  el.dataset.state = sync.status;
+  el.textContent = SYNC_TEXT[sync.status] || '';
+}
+
+function accountMenu() {
+  const user = currentUser();
+  if (!user) return;
+  let timer = 0;
+  sheet((sh, close) => {
+    const state = h('p', { class: 'acct-state' });
+    const paint = () => {
+      const n = sync?.count() || 0;
+      state.dataset.state = sync?.status || 'ok';
+      state.textContent = (SYNC_TEXT[sync?.status] || '') + (n && sync?.status !== 'syncing' ? ` · ${n} sin subir` : '');
+    };
+    paint();
+    timer = setInterval(paint, 1000);
+    sh.append(
+      h('div', { class: 'acct-head' },
+        h('span', { class: 'acct-avatar' }, (user.email || '?')[0].toUpperCase()),
+        h('div', { class: 'acct-who' }, h('strong', {}, user.email), state)),
+      h('p', { class: 'info' }, 'Tus guiones y nichos se guardan en tu cuenta y solo vos los podés ver. Los videos quedan en este teléfono.'),
+      h('div', { class: 'sheet-actions' },
+        h('button', { class: 'btn', onclick: () => { sync?.run().then(paint); } }, 'Sincronizar ahora'),
+        h('button', { class: 'btn', onclick: () => { close(); changePassword(); } }, 'Cambiar contraseña'),
+        h('button', { class: 'btn danger', onclick: () => { close(); logout(); } }, 'Cerrar sesión'),
+        h('button', { class: 'btn', onclick: () => close() }, 'Listo')));
+  }, { onClose: () => clearInterval(timer) });
+}
+
+async function logout() {
+  const user = currentUser();
+  if (sync) {
+    await sync.run();
+    const n = sync.count();
+    if (n && !(await confirmSheet(`Hay ${n} cambios que todavía no se subieron (sin internet). Si cerrás sesión ahora, se pierden.`, 'Cerrar sesión igual'))) return;
+  }
+  await signOut();
+  if (user) forgetAccount(user.id);
+  location.replace(location.pathname + '#/');
+  location.reload();
+}
+
+function passwordSheet(title, run) {
+  sheet((sh, close) => {
+    const input = h('input', { class: 'prompt-input', type: 'password', autocomplete: 'new-password', placeholder: 'Nueva contraseña (mínimo 8)', minlength: 8 });
+    const msg = h('p', { class: 'auth-msg', hidden: true });
+    const ok = h('button', { class: 'btn primary' }, 'Guardar');
+    ok.onclick = async () => {
+      if (input.value.length < 8) { msg.hidden = false; msg.textContent = 'La contraseña tiene que tener al menos 8 caracteres.'; return; }
+      ok.disabled = true;
+      try { await run(input.value); close(); toast('Listo, contraseña cambiada.'); } catch (e) { msg.hidden = false; msg.textContent = e.message; } finally { ok.disabled = false; }
+    };
+    sh.append(h('h2', {}, title), input, msg, h('div', { class: 'sheet-actions' }, ok, h('button', { class: 'btn', onclick: () => close() }, 'Cancelar')));
+    setTimeout(() => input.focus(), 60);
+  });
+}
+const changePassword = () => passwordSheet('Cambiar contraseña', setPassword);
+const askNewPassword = () => passwordSheet('Elegí una contraseña nueva', setPassword);
+
+// Pantalla de entrada: entrar o crear cuenta con email y contraseña.
+function showLogin(notice = '') {
+  setView('login');
+  let mode = 'in';
+  const email = h('input', { class: 'auth-input', type: 'email', inputmode: 'email', autocomplete: 'username', autocapitalize: 'off', spellcheck: 'false', placeholder: 'Email', 'aria-label': 'Email' });
+  const pass = h('input', { class: 'auth-input', type: 'password', autocomplete: 'current-password', placeholder: 'Contraseña', 'aria-label': 'Contraseña' });
+  const msg = h('p', { class: 'auth-msg', hidden: !notice }, notice);
+  const go1 = h('button', { class: 'btn primary auth-go', type: 'submit' });
+  const forgot = h('button', { class: 'auth-link', type: 'button' }, '¿Olvidaste tu contraseña?');
+  const tabs = [['in', 'Entrar'], ['up', 'Crear cuenta']].map(([m, label]) => h('button', { type: 'button', 'data-m': m, onclick: () => setMode(m) }, label));
+  const say = (text, kind = 'error') => { msg.hidden = !text; msg.textContent = text; msg.dataset.kind = kind; };
+  function setMode(m) {
+    mode = m;
+    tabs.forEach((b) => b.classList.toggle('on', b.dataset.m === m));
+    go1.textContent = m === 'in' ? 'Entrar' : 'Crear cuenta';
+    pass.autocomplete = m === 'in' ? 'current-password' : 'new-password';
+    pass.placeholder = m === 'in' ? 'Contraseña' : 'Contraseña (mínimo 8 caracteres)';
+    forgot.hidden = m !== 'in';
+    say('');
+  }
+  const form = h('form', { class: 'auth-form', novalidate: true },
+    h('div', { class: 'seg auth-tabs' }, tabs), email, pass, msg, go1, forgot);
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const em = email.value.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) return say('Escribí un email válido.');
+    if (pass.value.length < (mode === 'up' ? 8 : 1)) return say(mode === 'up' ? 'La contraseña tiene que tener al menos 8 caracteres.' : 'Escribí tu contraseña.');
+    go1.disabled = true;
+    say(mode === 'in' ? 'Entrando…' : 'Creando tu cuenta…', 'info');
+    try {
+      const user = mode === 'in' ? await signIn(em, pass.value) : await signUp(em, pass.value);
+      if (!user) {
+        setMode('in');
+        email.value = em;
+        say('¡Cuenta creada! Te mandamos un mail para confirmarla: tocá el link y después entrá acá con tu email y contraseña.', 'info');
+        return;
+      }
+      await afterLogin(user);
+    } catch (err) {
+      say(err.message);
+    } finally {
+      go1.disabled = false;
+    }
+  });
+  forgot.onclick = async () => {
+    const em = email.value.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) return say('Escribí tu email arriba y tocá de nuevo "¿Olvidaste tu contraseña?".');
+    try { await resetPassword(em); say('Te mandamos un mail con un link para elegir una contraseña nueva.', 'info'); } catch (err) { say(err.message); }
+  };
+  setMode('in');
+  if (notice) say(notice, 'info');
+  $('#login-card').replaceChildren(
+    h('img', { class: 'auth-icon', src: 'icons/icon-192.png', alt: '' }),
+    h('h1', { class: 'auth-title' }, 'Guion'),
+    h('p', { class: 'auth-sub' }, 'Tu teleprompter y calendario de grabación'),
+    form,
+    h('p', { class: 'auth-foot' }, 'Cada cuenta es independiente: tus guiones solo los ves vos.'));
+}
+
+// Primera vez de una cuenta en este teléfono: si el teléfono tiene guiones de antes de las
+// cuentas y la cuenta está vacía, se ofrece subirlos. Después se arranca de cero con la cuenta.
+async function afterLogin(user) {
+  setAccount(user.id);
+  const hasLocal = loadScripts().length > 0 || loadNiches().length > 0;
+  if (!hasLocal) {
+    const legacy = legacyData();
+    let empty = true;
+    try { empty = await Sync.remoteEmpty(); } catch { /* sin red: se decide con lo que hay */ }
+    if (legacy) {
+      const n = legacy.scripts.length;
+      const up = await choiceSheet(
+        empty ? `Este teléfono tiene ${n} guiones guardados. ¿Los subimos a tu cuenta?` : `Tu cuenta ya tiene guiones. Este teléfono tiene ${n} guiones más de antes. ¿Los sumamos a tu cuenta?`,
+        empty ? 'Sí, subirlos a mi cuenta' : 'Sí, sumarlos', 'No, empezar sin ellos');
+      if (up) { saveScripts(legacy.scripts); saveNichesLocal(legacy.niches); markLegacyMigrated(user.id); }
+      else if (empty) saveScripts([sampleScript()]);
+    } else if (empty) {
+      saveScripts([sampleScript()]);
+    }
+  }
+  location.replace(location.pathname + '#/');
+  location.reload();
+}
+
+function choiceSheet(msg, yes, no) {
+  return new Promise((resolve) => {
+    let answered = false;
+    sheet((sh, close) => {
+      sh.append(h('p', { class: 'msg' }, msg), h('div', { class: 'sheet-actions' },
+        h('button', { class: 'btn primary', onclick: () => { answered = true; close(); resolve(true); } }, yes),
+        h('button', { class: 'btn', onclick: () => { answered = true; close(); resolve(false); } }, no)));
+    }, { dismissable: false, onClose: () => { if (!answered) resolve(false); } });
+  });
 }
 
 // ---------- Editor ----------
@@ -1582,6 +1787,11 @@ function bind() {
   $('#search').addEventListener('input', renderLibrary);
   $('#btn-new').addEventListener('click', newScript);
   $('#btn-import').addEventListener('click', () => pickExcel(currentNiche() || null));
+  if (cloudEnabled) {
+    $('#btn-account').hidden = false;
+    $('#btn-account').innerHTML = ICONS.person;
+    $('#btn-account').addEventListener('click', accountMenu);
+  }
   $('#file-import').addEventListener('change', (e) => {
     const files = [...e.target.files];
     const target = importTarget;
@@ -1659,7 +1869,10 @@ function bind() {
 }
 
 bind();
+if (me) startSync();
 route();
+if (urlAuth?.error) toast(urlAuth.error, 6000);
+if (me && urlAuth?.type === 'recovery') askNewPassword();
 
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});

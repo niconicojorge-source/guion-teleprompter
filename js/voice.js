@@ -1,4 +1,4 @@
-import { tokenize, locate, follow } from './matcher.js?v=2.7';
+import { tokenize, locate, follow } from './matcher.js?v=2.8';
 
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 export const voiceSupported = !!SR;

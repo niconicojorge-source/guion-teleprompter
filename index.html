@@ -10,12 +10,12 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Guion">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: mediastream:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: mediastream:; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'none'; form-action 'none'">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icons/icon-180.png">
   <link rel="icon" type="image/png" href="icons/icon-192.png">
-  <link rel="stylesheet" href="css/app.css?v=2.7">
-  <script type="module" src="js/app.js?v=2.7"></script>
+  <link rel="stylesheet" href="css/app.css?v=2.8">
+  <script type="module" src="js/app.js?v=2.8"></script>
 </head>
 <body>
 
@@ -25,15 +25,24 @@
       <button id="lib-back" class="back-btn lib-back" hidden></button>
       <header class="lib-header">
         <h1 id="lib-title">Guion</h1>
-        <button id="btn-import" class="icon-btn" aria-label="Importar archivo de texto"></button>
+        <div class="head-actions">
+          <button id="btn-import" class="icon-btn" aria-label="Importar archivo"></button>
+          <button id="btn-account" class="icon-btn" aria-label="Mi cuenta" hidden></button>
+        </div>
       </header>
       <input id="search" class="search" type="search" placeholder="Buscar guiones" autocomplete="off">
       <ul id="script-list" class="script-list"></ul>
       <p id="empty" class="empty" hidden></p>
+      <p id="sync-state" class="sync-state" hidden></p>
       <p id="version" class="version"></p>
     </div>
     <button id="btn-new" class="fab">+ Nuevo guion</button>
     <input id="file-import" type="file" multiple hidden>
+  </section>
+
+  <!-- Entrar / crear cuenta -->
+  <section id="view-login" class="view login">
+    <div id="login-card" class="login-card"></div>
   </section>
 
   <!-- Editor -->

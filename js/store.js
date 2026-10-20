@@ -1,7 +1,16 @@
 // Todo se guarda en este dispositivo (localStorage). Si el almacenamiento falla
 // (modo privado, etc.) la app sigue funcionando en memoria.
-const SCRIPTS_KEY = 'guion.scripts.v1';
-const SETTINGS_KEY = 'guion.settings.v1';
+const SETTINGS_KEY = 'guion.settings.v1'; // ajustes del teleprompter: son de este teléfono
+const LEGACY_SCRIPTS = 'guion.scripts.v1';
+const LEGACY_NICHES = 'guion.niches.v1';
+
+// Con cuentas, los datos de cada una van en sus propias claves: guion.u.<id>.…
+// Sin cuenta (o antes de las cuentas), en las claves de siempre.
+let prefix = 'guion.';
+let account = null;
+export function setAccount(uid) { account = uid || null; prefix = uid ? `guion.u.${uid}.` : 'guion.'; }
+const SCRIPTS_KEY_ = () => prefix + 'scripts.v1';
+const NICHES_KEY_ = () => prefix + 'niches.v1';
 
 function read(key, fallback) {
   try {
@@ -36,25 +45,53 @@ Cuando estés listo, apretá el botón rojo para grabar. Hay una cuenta regresiv
 Ahora sí: creá un guion nuevo, pegá tu texto y a grabar.`;
 
 export function loadScripts() {
-  const { missing, value } = readSafe(SCRIPTS_KEY);
+  const { missing, value } = readSafe(SCRIPTS_KEY_());
   if (Array.isArray(value)) return value;
   // El guion de ejemplo solo se crea la primera vez (nunca sobre datos que no se pudieron leer).
-  if (!missing) return [];
+  // En una cuenta, lo decide el inicio de sesión (puede que la cuenta ya tenga guiones).
+  if (!missing || account) return [];
   const now = Date.now();
   const list = [{ id: uid(), title: 'Guion de prueba', category: '', text: SAMPLE, createdAt: now, updatedAt: now }];
-  write(SCRIPTS_KEY, list);
+  write(SCRIPTS_KEY_(), list);
   return list;
 }
 
-export function saveScripts(list) { return write(SCRIPTS_KEY, list); }
+export function saveScripts(list) { return write(SCRIPTS_KEY_(), list); }
 
-// Nichos creados por el usuario (con o sin guiones): [{ name, perDay }]
-const NICHES_KEY = 'guion.niches.v1';
+export const sampleScript = () => { const now = Date.now(); return { id: uid(), title: 'Guion de prueba', category: '', text: SAMPLE, createdAt: now, updatedAt: now }; };
+
+// Datos de este teléfono de antes de las cuentas (para ofrecer subirlos a una cuenta).
+const MIGRATED = 'guion.legacy.migrated';
+export function legacyData() {
+  try {
+    if (localStorage.getItem(MIGRATED)) return null;
+    const scripts = JSON.parse(localStorage.getItem(LEGACY_SCRIPTS) || '[]');
+    const niches = JSON.parse(localStorage.getItem(LEGACY_NICHES) || '[]');
+    const real = Array.isArray(scripts) ? scripts.filter((s) => s.title !== 'Guion de prueba' || s.text !== SAMPLE) : [];
+    return real.length || (Array.isArray(niches) && niches.length) ? { scripts: Array.isArray(scripts) ? scripts : [], niches: Array.isArray(niches) ? niches : [] } : null;
+  } catch { return null; }
+}
+export function markLegacyMigrated(uid) { try { localStorage.setItem(MIGRATED, uid); } catch { /* nada */ } }
+// Una vez que todo quedó en la cuenta, la copia vieja ya no hace falta (libera espacio).
+export function dropLegacyIfMigrated(uid) {
+  try {
+    if (localStorage.getItem(MIGRATED) !== uid) return;
+    localStorage.removeItem(LEGACY_SCRIPTS);
+    localStorage.removeItem(LEGACY_NICHES);
+  } catch { /* nada */ }
+}
+
+// Al cerrar sesión se borra la copia local de esa cuenta (queda en el servidor).
+export function forgetAccount(uid) {
+  try { for (const k of Object.keys(localStorage)) if (k.startsWith(`guion.u.${uid}.`)) localStorage.removeItem(k); } catch { /* nada */ }
+}
+
+// Nichos creados por el usuario (con o sin guiones): [{ name, perDay, layout }]
 export function loadNiches() {
-  const list = read(NICHES_KEY, []);
+  const list = read(NICHES_KEY_(), []);
   return Array.isArray(list) ? list : [];
 }
-export function saveNiches(list) { return write(NICHES_KEY, list); }
+export function saveNiches(list) { return write(NICHES_KEY_(), list); }
 
 const LANGS = ['es-AR', 'es-ES', 'es-MX', 'es-US', 'en-US', 'pt-BR'];
 function guessLang() {
