@@ -25,12 +25,13 @@ async function unzip(buf) {
     };
     p += 46 + nameLen + dv.getUint16(p + 30, true) + dv.getUint16(p + 32, true);
   }
-  return async (name) => {
+  // read(name) devuelve texto; read(name, true), los bytes.
+  return async (name, binary = false) => {
     const f = files[name];
     if (!f) return null;
     const start = f.offset + 30 + dv.getUint16(f.offset + 26, true) + dv.getUint16(f.offset + 28, true);
     const data = new Uint8Array(buf, start, f.size);
-    if (f.method === 0) return dec.decode(data);
+    if (f.method === 0) return binary ? data.slice() : dec.decode(data);
     if (f.method !== 8) throw new Error('Formato de compresión no soportado.');
     const reader = new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw')).getReader();
     const parts = [];
@@ -42,7 +43,8 @@ async function unzip(buf) {
       if (total > MAX_UNZIPPED) { reader.cancel(); throw new Error('El archivo es demasiado grande.'); }
       parts.push(value);
     }
-    return new TextDecoder().decode(await new Blob(parts).arrayBuffer());
+    const out = await new Blob(parts).arrayBuffer();
+    return binary ? new Uint8Array(out) : new TextDecoder().decode(out);
   };
 }
 
@@ -82,13 +84,51 @@ async function relsOf(read, path) {
   return rels;
 }
 
-// ¿Qué hay adentro de un ZIP? Excel, Word o un archivo de Numbers/Pages.
+// ¿Qué hay adentro de un ZIP? Excel, Word, OpenDocument, Numbers o Pages.
 export async function zipKind(file) {
   const read = await unzip(await file.arrayBuffer());
   if (await read('xl/workbook.xml') || /spreadsheetml/.test((await read('[Content_Types].xml')) || '')) return 'xlsx';
   if (await read('word/document.xml')) return 'docx';
-  if (await read('Index/Document.iwa') || await read('Index.zip')) return 'iwork';
+  const mime = ((await read('mimetype')) || '').trim();
+  if (/opendocument\.text/.test(mime)) return 'odt';
+  if (/opendocument\.spreadsheet/.test(mime)) return 'sheet';
+  if (await read('Index/Document.iwa') || await read('Index.zip')) {
+    if (/\.pages$/i.test(file.name)) return 'pages';
+    if (/\.key$/i.test(file.name)) return 'keynote';
+    return 'sheet'; // Numbers
+  }
+  if (await read('xl/workbook.bin')) return 'sheet';
   return 'zip';
+}
+
+// Pages guarda una vista previa en PDF (las versiones que la tienen): de ahí sale el texto.
+export async function pagesPreview(file) {
+  const read = await unzip(await file.arrayBuffer());
+  const pdf = (await read('QuickLook/Preview.pdf', true)) || (await read('preview.pdf', true));
+  return pdf ? new File([pdf], file.name.replace(/\.pages$/i, '.pdf'), { type: 'application/pdf' }) : null;
+}
+
+// Lo que el lector propio no cubre (.xls viejo, Numbers, OpenDocument, .xlsb) lo lee SheetJS,
+// que se carga solo cuando hace falta.
+let sheetjs = null;
+function loadSheetJS() {
+  sheetjs ||= new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = new URL('./vendor/xlsx.full.min.js', import.meta.url).href;
+    s.onload = () => (window.XLSX ? resolve(window.XLSX) : reject(new Error('no se pudo cargar el lector de planillas.')));
+    s.onerror = () => { sheetjs = null; reject(new Error('no se pudo cargar el lector de planillas (¿sin internet?).')); };
+    document.head.append(s);
+  });
+  return sheetjs;
+}
+
+export async function readAnySheet(file) {
+  const XLSX = await loadSheetJS();
+  const wb = XLSX.read(new Uint8Array(await file.arrayBuffer()), { type: 'array', dense: true });
+  return wb.SheetNames.map((name) => ({
+    name,
+    rows: XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: true, defval: '', blankrows: true }).slice(0, MAX_ROWS),
+  }));
 }
 
 // Devuelve [{ name, rows: string[][] }] con todas las hojas del libro.
@@ -160,19 +200,56 @@ export function readCSV(text, name) {
   return [{ name, rows }];
 }
 
-// Texto de un .docx, un párrafo por línea.
+// Texto de un .docx, un párrafo por línea. Los títulos de Word salen como "# Título" y un
+// párrafo todo en negrita como "**Título**", así se reconocen como el comienzo de un guion.
 export async function readDocx(file) {
   const read = await unzip(await file.arrayBuffer());
   const doc = xml(await read('word/document.xml'));
+  const isOn = (el) => el && !/^(0|false|off)$/i.test(el.getAttribute('w:val') || '');
   return [...doc.getElementsByTagName('w:p')].map((p) => {
     let out = '';
+    let bold = true;
     for (const el of p.getElementsByTagName('*')) {
-      if (el.tagName === 'w:t') out += el.textContent;
-      else if (el.tagName === 'w:tab') out += ' ';
+      if (el.tagName === 'w:t') {
+        out += el.textContent;
+        if (el.textContent.trim() && !isOn(el.parentNode?.getElementsByTagName('w:rPr')[0]?.getElementsByTagName('w:b')[0])) bold = false;
+      } else if (el.tagName === 'w:tab') out += ' ';
       else if (el.tagName === 'w:br') out += '\n';
     }
+    const style = p.getElementsByTagName('w:pStyle')[0]?.getAttribute('w:val') || '';
+    const t = out.trim();
+    if (t && /heading|t[ií]?tulo|ttulo|title/i.test(style) && t.length <= 120) return '# ' + t;
+    if (t && bold && t.length <= 90 && !out.includes('\n')) return `**${t}**`;
     return out;
   }).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+// Texto de un documento de OpenDocument (.odt: LibreOffice, Google Docs descargado).
+export async function readODT(file) {
+  const read = await unzip(await file.arrayBuffer());
+  const doc = xml(await read('content.xml'));
+  const out = [];
+  const walk = (node) => {
+    for (const el of node.children) {
+      const name = el.localName;
+      if (name === 'h' || name === 'p') {
+        let t = '';
+        const inline = (n) => {
+          for (const c of n.childNodes) {
+            if (c.nodeType === 3) t += c.textContent;
+            else if (c.localName === 's') t += ' '.repeat(Number(c.getAttribute('text:c')) || 1);
+            else if (c.localName === 'tab') t += ' ';
+            else if (c.localName === 'line-break') t += '\n';
+            else if (c.nodeType === 1) inline(c);
+          }
+        };
+        inline(el);
+        out.push(name === 'h' && t.trim() ? '# ' + t.trim() : t);
+      } else walk(el);
+    }
+  };
+  walk(doc.documentElement);
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 // ---------- De hojas a guiones ----------

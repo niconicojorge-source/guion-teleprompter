@@ -1,13 +1,13 @@
 // El ?v= de cada import hace que una versión nunca se mezcle con archivos viejos en caché.
-import { loadScripts, saveScripts, loadSettings, saveSettings, loadNiches, saveNiches as saveNichesLocal, defaultSettings, LAYOUT_KEYS, uid, setAccount, sampleScript, legacyData, markLegacyMigrated, dropLegacyIfMigrated, forgetAccount } from './store.js?v=3.1';
-import { cloudEnabled, currentUser, takeSessionFromUrl, signIn, signUp, signOut, resetPassword, setPassword, signupOpen, Sync } from './cloud.js?v=3.1';
-import { norm } from './matcher.js?v=3.1';
-import { VoiceFollower, voiceSupported, voiceLog, logVoice } from './voice.js?v=3.1';
-import { openCamera, Recorder, pickMime } from './camera.js?v=3.1';
-import { AudioBridge } from './audio.js?v=3.1';
-import { createRenderer } from './editor.js?v=3.1';
+import { loadScripts, saveScripts, loadSettings, saveSettings, loadNiches, saveNiches as saveNichesLocal, defaultSettings, LAYOUT_KEYS, uid, setAccount, sampleScript, legacyData, markLegacyMigrated, dropLegacyIfMigrated, forgetAccount } from './store.js?v=3.2';
+import { cloudEnabled, currentUser, takeSessionFromUrl, signIn, signUp, signOut, resetPassword, setPassword, signupOpen, Sync } from './cloud.js?v=3.2';
+import { norm } from './matcher.js?v=3.2';
+import { VoiceFollower, voiceSupported, voiceLog, logVoice } from './voice.js?v=3.2';
+import { openCamera, Recorder, pickMime } from './camera.js?v=3.2';
+import { AudioBridge } from './audio.js?v=3.2';
+import { createRenderer } from './editor.js?v=3.2';
 
-const VERSION = '3.1';
+const VERSION = '3.2';
 
 // ---------- Utilidades ----------
 const $ = (s, root = document) => root.querySelector(s);
@@ -314,7 +314,7 @@ function renderLibrary() {
       }
     } else {
       if (niche !== '_') items.push(nicheToolbar(niche));
-      if (!pool.length) items.push(h('li', { class: 'hint' }, 'Este nicho todavía no tiene guiones. Importá un Excel con el botón de arriba, o abrí un día del calendario y escribilos ahí.'));
+      if (!pool.length) items.push(h('li', { class: 'hint' }, 'Este nicho todavía no tiene guiones. Importá un archivo (PDF, Word, Excel o texto) con el botón de arriba, o abrí un día del calendario y escribilos ahí.'));
       const t = todayISO();
       items.push(folderRow({ label: 'Hoy · ' + dayLabel(t, true), path: `${base}/${t.split('-').join('/')}`, list: pool.filter((s) => s.date === t), dots: true, today: true }));
       const groups = groupBy(pool, (s) => s.date.slice(0, 4));
@@ -356,7 +356,7 @@ function nicheTile(key, list) {
   const t = todayISO();
   const today = key == null ? [] : list.filter((s) => s.date === t);
   const tp = progress(today);
-  const sub = key == null ? `${p.total} sin fecha` : p.total ? `${p.total} guiones · ${p.done} hechos` : 'Vacío · importá un Excel o escribí los guiones';
+  const sub = key == null ? `${p.total} sin fecha` : p.total ? `${p.total} guiones · ${p.done} hechos` : 'Vacío · importá un archivo o escribí los guiones';
   return h('li', { class: 'niche' + (key == null ? ' other' : '') },
     h('button', { onclick: () => go(key == null ? '/o' : nicheBase(key)) },
       h('span', { class: 'n-main' },
@@ -689,50 +689,94 @@ function pickExcel(target) {
 }
 
 // Acepta cualquier archivo y se fija qué es por su contenido, no solo por el nombre:
-// Excel (.xlsx), CSV, Word (.docx) o texto. Lo que no se puede leer explica cómo exportarlo.
+// planillas (Excel nuevo y viejo, Numbers, OpenDocument, CSV) y documentos (PDF, Word, Pages,
+// OpenDocument, RTF, HTML, texto). De cada uno saca los guiones y los muestra antes de importar.
 async function importFiles(files, target = null) {
-  const xlsx = () => import('./xlsx.js?v=3.1');
-  let texts = 0;
-  const addText = (name, text) => {
-    const now = Date.now();
-    const date = lib.parts.length === 3 ? lib.parts.join('-') : '';
-    scripts.unshift({ id: uid(), title: name.replace(/\.[^.]+$/, ''), category: target || currentNiche(), text: text.replace(/\r\n?/g, '\n'), date, done: false, createdAt: now, updatedAt: now });
-    texts++;
-  };
+  const xlsx = () => import('./xlsx.js?v=3.2');
+  const docs = () => import('./docs.js?v=3.2');
   for (const f of files) {
     if (f.size > 40 * 1024 * 1024) { toast(`"${f.name}" es demasiado grande (más de 40 MB).`, 6000); continue; }
     try {
       const head = new Uint8Array(await f.slice(0, 8).arrayBuffer());
-      const sig = String.fromCharCode(...head.slice(0, 4));
-      if (sig === 'PK\x03\x04') {
-        const { zipKind, readWorkbook, readDocx } = await xlsx();
+      const sig = String.fromCharCode(...head.slice(0, 5));
+      const sheetsOf = (load) => importRows(f, target, async () => {
+        const { scriptsFromWorkbook } = await xlsx();
+        const list = await load();
+        return { rows: scriptsFromWorkbook(list), sheets: list };
+      });
+      const docOf = (load) => importRows(f, target, async () => {
+        const { splitScripts } = await docs();
+        const text = await load();
+        return { variants: splitScripts(text, { name: f.name, line: target || docNiche(f.name), niches: niches.map((n) => n.name) }) };
+      });
+      if (sig.startsWith('PK\x03\x04')) {
+        const { zipKind, readWorkbook, readDocx, readODT, readAnySheet, pagesPreview } = await xlsx();
         const kind = await zipKind(f);
-        if (kind === 'xlsx') await importExcel(f, target, () => readWorkbook(f));
-        else if (kind === 'docx') addText(f.name, await readDocx(f));
-        else if (kind === 'iwork') toast(`"${f.name}" es de Numbers o Pages. Abrilo y exportalo como Excel (.xlsx) o CSV, y volvé a importarlo.`, 8000);
-        else toast(`No sé leer "${f.name}". Probá con un Excel (.xlsx), CSV, Word o texto.`, 6000);
+        if (kind === 'xlsx') await sheetsOf(() => readWorkbook(f));
+        else if (kind === 'sheet') await sheetsOf(() => readAnySheet(f));
+        else if (kind === 'docx') await docOf(() => readDocx(f));
+        else if (kind === 'odt') await docOf(() => readODT(f));
+        else if (kind === 'pages') {
+          const pdf = await pagesPreview(f);
+          if (pdf) await docOf(async () => (await docs()).readPDF(pdf));
+          else toast(`"${f.name}" es de Pages. Abrilo y exportalo como PDF o Word, y volvé a importarlo.`, 8000);
+        } else if (kind === 'keynote') toast(`"${f.name}" es una presentación de Keynote. Exportala como PDF y volvé a importarla.`, 8000);
+        else toast(`"${f.name}" es un archivo comprimido (.zip). Descomprimilo e importá los archivos de adentro.`, 7000);
       } else if (head[0] === 0xd0 && head[1] === 0xcf && head[2] === 0x11 && head[3] === 0xe0) {
-        toast(`"${f.name}" es un Excel viejo (.xls). Abrilo y guardalo como .xlsx (o descargalo como .xlsx desde Google Sheets).`, 8000);
-      } else if (sig === '%PDF') {
-        toast('Los PDF no se pueden importar. Exportá el documento como Excel, Word o texto.', 7000);
+        // Formato viejo de Office: un .xls se lee; un .doc o .ppt hay que guardarlo de nuevo.
+        if (/\.(doc|dot|ppt|pps)$/i.test(f.name)) toast(`"${f.name}" es un Word o PowerPoint viejo. Abrilo y guardalo como .docx o PDF, y volvé a importarlo.`, 8000);
+        else await sheetsOf(() => readXlsOrExplain(f, xlsx));
+      } else if (sig === '%PDF-') {
+        await docOf(async () => (await docs()).readPDF(f));
       } else if (/^(image|video|audio)\//.test(f.type)) {
-        toast(`"${f.name}" no es un documento. Elegí un Excel, CSV, Word o texto.`, 6000);
-      } else if (/\.(csv|tsv)$/i.test(f.name) || /csv|tab-separated/.test(f.type)) {
-        const { readCSV } = await xlsx();
-        const text = await f.text();
-        await importExcel(f, target, () => readCSV(text, f.name.replace(/\.[^.]+$/, '')));
+        toast(`"${f.name}" no es un documento. Elegí un PDF, Word, Excel, Numbers o texto.`, 6000);
       } else {
-        addText(f.name, await f.text());
+        const { decodeText, readRTF, readHTML } = await docs();
+        const text = decodeText(await f.arrayBuffer());
+        if (/\0/.test(text.slice(0, 2000))) { toast(`No sé leer "${f.name}". Probá con un PDF, Word, Excel o texto.`, 6000); continue; }
+        if (/^\s*\{\\rtf/.test(text)) await docOf(() => readRTF(text));
+        else if (/\.(html?|xhtml)$/i.test(f.name) || /^\s*<(!doctype html|html)\b/i.test(text)) await docOf(() => readHTML(text));
+        else if (/\.(csv|tsv)$/i.test(f.name) || /csv|tab-separated/.test(f.type) || looksTabular(text)) {
+          // Una tabla en texto: si tiene una columna de guiones se usa; si no, se lee como documento.
+          await importRows(f, target, async () => {
+            const { readCSV, scriptsFromWorkbook } = await xlsx();
+            const list = readCSV(text, f.name.replace(/\.[^.]+$/, ''));
+            const rows = scriptsFromWorkbook(list);
+            if (rows.length) return { rows, sheets: list };
+            const { splitScripts } = await docs();
+            return { variants: splitScripts(text, { name: f.name, line: target || docNiche(f.name), niches: niches.map((n) => n.name) }) };
+          });
+        } else await docOf(() => text);
       }
     } catch (e) {
       toast(`No pude leer "${f.name}": ${e.message}`, 6000);
     }
   }
-  if (texts) {
-    persist();
-    renderLibrary();
-    toast(texts === 1 ? 'Guion importado' : `${texts} guiones importados`);
+}
+
+async function readXlsOrExplain(f, xlsx) {
+  try {
+    return await (await xlsx()).readAnySheet(f);
+  } catch (e) {
+    throw new Error(/cargar/.test(e.message) ? e.message : 'no parece un Excel. Si es otro tipo de archivo, guardalo como PDF, Word o Excel (.xlsx).');
   }
+}
+
+// Texto copiado de una planilla: la mayoría de los renglones tiene tabulaciones.
+function looksTabular(text) {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim()).slice(0, 50);
+  return lines.length >= 2 && lines.filter((l) => l.includes('\t')).length >= lines.length * 0.6;
+}
+
+// Nicho de un documento importado desde el inicio: uno existente si el nombre del archivo lo
+// menciona ("Guiones Courier.pdf" → Courier); si no, el nombre del archivo.
+function docNiche(fileName) {
+  const base = fileName.replace(/\.[^.]+$/, '');
+  const f = fold(base);
+  const known = niches.slice().sort((a, b) => b.name.length - a.name.length).find((n) => fold(n.name).length > 2 && f.includes(fold(n.name)));
+  if (known) return known.name;
+  const clean = base.replace(/[_]+/g, ' ').replace(/\s*\(\d+\)$/, '').replace(/\s+/g, ' ').trim() || 'Guiones';
+  return clean.charAt(0).toUpperCase() + clean.slice(1);
 }
 
 // Los guiones del Excel se identifican por nicho + código: si importás de nuevo una versión
@@ -761,101 +805,163 @@ function importPlan(rows, target) {
   return { lineOf, keyFor, existing };
 }
 
-async function importExcel(file, target, loadSheets) {
-  toast('Leyendo el archivo…', 15000);
-  let rows;
-  let sheetList = [];
+// Cómo se ve un guion en la vista previa: "Lun 19 oct · 09:00 · Título" o "Día 2 · Título".
+function previewLabel(r, i) {
+  if (!r.date && !r.day) return `${i + 1}. ${r.title}`;
+  return [r.date ? shortDayDate(r.date) : `Día ${r.day}`, r.time, r.title].filter(Boolean).join(' · ');
+}
+const shortDayDate = (iso) => new Date(iso + 'T12:00').toLocaleDateString('es-AR', { weekday: 'short', day: 'numeric', month: 'short' });
+
+// Lee el archivo y muestra lo que encontró: las hojas o nichos, cómo se dividió el texto, una
+// vista previa, y si va al calendario (N por día) o en lista. `load` devuelve
+// { rows, sheets } (planillas) o { variants: [{ id, label, rows }] } (documentos).
+async function importRows(file, target, load) {
+  toast('Leyendo el archivo…', 20000);
+  let found;
   try {
-    const { scriptsFromWorkbook } = await import('./xlsx.js?v=3.1');
-    sheetList = await loadSheets();
-    rows = scriptsFromWorkbook(sheetList);
+    found = await load();
   } catch (e) {
-    toast('No pude leer el archivo: ' + e.message, 6000);
+    toast(`No pude leer "${file.name}": ${e.message}`, 7000);
     return;
   }
   $('#toast').hidden = true;
-  if (!rows.length) {
-    const names = sheetList.map((x) => `"${x.name}"`).join(', ');
-    toast(sheetList.length
-      ? `No encontré guiones en ${names}. Cada guion tiene que estar en una celda, en una columna (idealmente con el título "Guion").`
-      : 'El archivo no tiene hojas con datos.', 9000);
+  const variants = (found.variants || [{ id: 'sheet', label: '', rows: found.rows }]).filter((v) => v.rows.length);
+  if (!variants.length) {
+    const names = (found.sheets || []).map((x) => `"${x.name}"`).join(', ');
+    toast(found.sheets
+      ? (found.sheets.length
+        ? `No encontré guiones en ${names}. Cada guion tiene que estar en una celda, en una columna (idealmente con el título "Guion").`
+        : 'El archivo no tiene hojas con datos.')
+      : `No encontré texto en "${file.name}".`, 9000);
     return;
   }
 
-  const sheets = [...groupBy(rows, (r) => r.sheet)].map(([name, list]) => {
-    const dates = list.map((r) => r.date).filter(Boolean).sort();
-    return { name, line: list[0].line, list, from: dates[0], to: dates[dates.length - 1] };
-  });
-  const chosen = new Set(sheets.map((s) => s.name));
-
   sheet((sh, close) => {
+    let variant = variants[0];
+    let rows = [];
+    let groups = [];
+    let chosen = new Set();
+    const groupKey = (r) => `${r.sheet}\u0000${r.line}`;
     const go1 = h('button', { class: 'btn primary' });
     const info = h('p', { class: 'info' });
+    const msg = h('p', { class: 'msg' });
+    const sum = h('ul', { class: 'import-sum' });
+    const preview = h('ol', { class: 'import-preview' });
     // Guiones sin fecha: se reparten en el calendario desde el día elegido, N por día.
-    const from = h('input', { type: 'date', class: 'ed-date', value: todayISO() });
+    const startDefault = lib.parts.length === 3 ? lib.parts.join('-') : todayISO();
+    const from = h('input', { type: 'date', class: 'ed-date', value: startDefault });
     const spread = h('div', { class: 'spread' },
       h('p', { class: 'msg' }),
-      h('label', {}, 'Repartirlos desde el ', from));
+      h('label', {}, 'Empezar el ', from));
     const pending = (sel, plan) => sel.filter((r) => !r.date && !plan.existing.has(plan.keyFor(r)));
-    // Por defecto: como ya está el nicho; si es nuevo, calendario si el archivo trae fechas.
-    const known = target ? nicheOf(target) : nicheOf(rows[0].line);
-    const pick = layoutPicker(known?.layout || (known && listOf(known.name).length ? 'calendar' : rows.some((r) => r.date) ? 'calendar' : 'list'), () => refresh());
+    const selected = () => rows.filter((r) => chosen.has(groupKey(r)));
+    // Por defecto calendario (N por día), salvo que el nicho ya esté organizado como lista.
+    const known = target ? nicheOf(target) : nicheOf(variants[0].rows[0].line);
+    const pick = layoutPicker(known?.layout || 'calendar', () => refresh());
+    // Un documento importado desde el inicio: a qué nicho va (uno existente o uno nuevo).
+    let dest = target;
+    const docLines = [...new Set(variants[0].rows.map((r) => r.line))];
+    const nichePick = !target && variants[0].label && docLines.length === 1 ? (() => {
+      const suggested = niches.find((n) => fold(n.name) === fold(docLines[0]))?.name || docLines[0];
+      const names = [...new Set([suggested, ...niches.map((n) => n.name)])];
+      dest = suggested;
+      const select = h('select', { class: 'prompt-input niche-select', onchange: (e) => { dest = e.target.value; refresh(); } },
+        names.map((n) => h('option', { value: n, selected: n === suggested }, nicheOf(n) ? n : `${n} (nicho nuevo)`)));
+      return h('label', { class: 'niche-pick' }, h('span', { class: 'pick-q' }, 'Nicho'), select);
+    })() : null;
+
+    // "¿Cómo están separados?": solo si el texto se puede dividir de más de una forma.
+    const splitBtns = variants.map((v) => h('button', {
+      type: 'button', class: 'split-opt', 'aria-pressed': String(v === variant),
+      onclick: () => { setVariant(v); splitBtns.forEach((b, i) => b.setAttribute('aria-pressed', String(variants[i] === v))); },
+    }, `${v.label} · ${v.rows.length}`));
+    const splitPick = variants.length > 1 ? h('div', { class: 'split-pick' }, h('p', { class: 'pick-q' }, '¿Cómo están separados los guiones?'), h('div', { class: 'split-opts' }, splitBtns)) : null;
+
+    const setVariant = (v) => {
+      variant = v;
+      rows = v.rows;
+      groups = [...groupBy(rows, groupKey)].map(([key, list]) => {
+        const dates = list.map((r) => r.date).filter(Boolean).sort();
+        return { key, name: list[0].sheet, line: list[0].line, list, from: dates[0], to: dates[dates.length - 1] };
+      });
+      chosen = new Set(groups.map((g) => g.key));
+      const multi = groups.length > 1;
+      msg.textContent = `Encontré ${rows.length === 1 ? '1 guion' : `${rows.length} guiones`} en "${file.name}"${multi ? '. Elegí cuáles importar:' : ':'}`;
+      sum.className = 'import-sum' + (multi ? ' pick' : '');
+      sum.replaceChildren(...groups.map((g) => {
+        const days = new Set(g.list.map((r) => r.date || (r.day ? 'd' + r.day : '')).filter(Boolean)).size;
+        const text = [h('strong', {}, target && !variant.label ? g.name : g.line), ` · ${g.list.length} guiones${g.from ? ` · ${shortDate(g.from)} → ${shortDate(g.to)}` : days > 1 ? ` · ${days} días` : ''}`];
+        if (!multi) return h('li', {}, text);
+        const cb = h('input', { type: 'checkbox', checked: true, onchange: (e) => { if (e.target.checked) chosen.add(g.key); else chosen.delete(g.key); refresh(); } });
+        return h('li', {}, h('label', {}, cb, h('span', {}, text)));
+      }));
+      refresh();
+    };
+
     const refresh = () => {
-      const sel = rows.filter((r) => chosen.has(r.sheet));
-      const plan = importPlan(sel, target);
+      const sel = selected();
+      const plan = importPlan(sel, dest);
       const updates = sel.filter((r) => plan.existing.has(plan.keyFor(r))).length;
       const done = sel.filter((r) => r.done).length;
       const undated = pending(sel, plan);
+      const byDay = undated.filter((r) => r.day);
+      const loose = undated.length - byDay.length;
       const asList = pick.value === 'list';
+      const per = dest ? perDay(dest) : 3;
       spread.hidden = asList || !undated.length;
-      spread.firstChild.textContent = `${undated.length === 1 ? '1 guion no tiene fecha' : `${undated.length} guiones no tienen fecha`}: los acomodo en el calendario, ${target ? perDay(target) : 3} por día, en el orden del archivo.`;
-      go1.textContent = sel.length ? `Importar ${sel.length} guiones` : 'Elegí al menos una hoja';
+      spread.firstChild.textContent = [
+        byDay.length ? `${byDay.length} van por día como en el archivo (Día 1 = el día que elijas).` : '',
+        loose ? `${loose === 1 ? '1 guion no tiene fecha' : `${loose} guiones no tienen fecha`}: los acomodo en el calendario, ${per} por día, en el orden del archivo.` : '',
+      ].filter(Boolean).join(' ');
+      const shown = sel.slice(0, 6);
+      preview.replaceChildren(...shown.map((r, i) => h('li', {}, previewLabel(r, i))),
+        ...(sel.length > shown.length ? [h('li', { class: 'more' }, `y ${sel.length - shown.length} más`)] : []));
+      go1.textContent = sel.length ? `Importar ${sel.length === 1 ? '1 guion' : `${sel.length} guiones`}` : 'Elegí al menos uno';
       go1.disabled = !sel.length;
       info.textContent = [
-        (target ? `Todo va al nicho "${target}"` : 'Cada hoja va a su nicho') + (asList ? ', uno después del otro en el orden del archivo.' : ', ordenado por año, mes y día.'),
+        (dest ? `Todo va al nicho "${dest}"` : groups.length > 1 ? 'Cada uno va a su nicho' : `Va al nicho "${plan.lineOf(sel[0] || rows[0])}"`) + (asList ? ', uno después del otro en el orden del archivo.' : ', ordenado por año, mes y día.'),
         done ? `${done} figuran como publicados y entran en verde.` : '',
         updates ? `${updates} ya estaban en la app: se actualizan y conservan su estado.` : '',
       ].filter(Boolean).join(' ');
     };
     go1.onclick = () => {
       close();
-      const sel = rows.filter((r) => chosen.has(r.sheet));
-      applyImport(sel, target, from.value || todayISO(), pick.value);
+      applyImport(selected(), dest, from.value || todayISO(), pick.value);
     };
-    const multi = sheets.length > 1;
     sh.append(
       h('h2', {}, target ? `Importar a ${target}` : 'Importar archivo'),
-      h('p', { class: 'msg' }, `Encontré ${rows.length} guiones en "${file.name}"${multi ? '. Elegí qué hojas importar:' : ':'}`),
-      h('ul', { class: 'import-sum' + (multi ? ' pick' : '') }, sheets.map((s) => {
-        const text = [h('strong', {}, target ? s.name : s.line), ` · ${s.list.length} guiones${s.from ? ` · ${shortDate(s.from)} → ${shortDate(s.to)}` : ''}`];
-        if (!multi) return h('li', {}, text);
-        const cb = h('input', { type: 'checkbox', checked: true, onchange: (e) => { if (e.target.checked) chosen.add(s.name); else chosen.delete(s.name); refresh(); } });
-        return h('li', {}, h('label', {}, cb, h('span', {}, text)));
-      })),
+      ...[msg, sum, nichePick, splitPick, preview].filter(Boolean),
       pick.el,
       spread,
       info,
       h('div', { class: 'sheet-actions' }, go1, h('button', { class: 'btn', onclick: () => close() }, 'Cancelar')));
-    refresh();
+    setVariant(variant);
   });
 }
 
-// Fechas para los guiones nuevos sin fecha: desde `start`, completando cada día hasta los
-// videos por día del nicho (contando los que ya hay ese día).
+// Fechas para los guiones nuevos sin fecha, desde `start`: los que traen "Día N" van a ese día;
+// el resto completa cada día hasta los videos por día del nicho (contando los que ya hay).
 function spreadDates(rows, lineOf, keyFor, existing, start) {
   const used = new Map();
   const count = (line, iso) => used.get(`${line}|${iso}`) || 0;
+  const add = (line, iso) => used.set(`${line}|${iso}`, count(line, iso) + 1);
   for (const s of scripts) if (s.date) used.set(`${s.category}|${s.date}`, count(s.category, s.date) + 1);
-  for (const r of rows) if (r.date && !existing.has(keyFor(r))) used.set(`${lineOf(r)}|${r.date}`, count(lineOf(r), r.date) + 1);
-  const next = nextDay;
+  for (const r of rows) if (r.date && !existing.has(keyFor(r))) add(lineOf(r), r.date);
   const dates = new Map();
+  for (const r of rows) {
+    if (r.date || !r.day || existing.has(keyFor(r))) continue;
+    let iso = start;
+    for (let i = 1; i < r.day; i++) iso = nextDay(iso);
+    add(lineOf(r), iso);
+    dates.set(r, iso);
+  }
   const day = new Map();
   for (const r of rows) {
-    if (r.date || existing.has(keyFor(r))) continue;
+    if (r.date || dates.has(r) || existing.has(keyFor(r))) continue;
     const line = lineOf(r);
     let iso = day.get(line) || start;
-    while (count(line, iso) >= perDay(line)) iso = next(iso);
-    used.set(`${line}|${iso}`, count(line, iso) + 1);
+    while (count(line, iso) >= perDay(line)) iso = nextDay(iso);
+    add(line, iso);
     day.set(line, iso);
     dates.set(r, iso);
   }

@@ -448,6 +448,17 @@ button.cal-day.empty b { color: var(--faint); }
 .layout-opt .lo-ic svg { width: 100%; height: 100%; }
 .layout-opt[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
 .layout-opt[aria-pressed="true"] .lo-ic { color: var(--accent-hi); }
+.split-pick { margin: 14px 0 0; }
+.split-pick .pick-q { margin: 0 0 8px; font-size: 15px; font-weight: 650; color: var(--text); }
+.split-opts { display: flex; flex-wrap: wrap; gap: 8px; }
+.split-opt { padding: 8px 12px; border-radius: 999px; background: var(--fill); border: 1.5px solid transparent; color: var(--text); font: inherit; font-size: 14px; cursor: pointer; }
+.split-opt[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.import-preview { margin: 12px 0 0; padding: 10px 12px 10px 14px; list-style: none; border-radius: 14px; background: var(--fill); font-size: 13.5px; line-height: 1.6; color: #d3d7e0; }
+.import-preview li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.import-preview li.more { color: var(--muted); }
+.niche-pick { display: block; margin: 14px 0 0; }
+.niche-pick .pick-q { display: block; margin: 0 0 8px; font-size: 15px; font-weight: 650; color: var(--text); }
+.niche-select { width: 100%; color: var(--text); font-family: inherit; }
 .card h3 .n { color: var(--accent-hi); margin-right: 6px; font-variant-numeric: tabular-nums; }
 
 /* ---------- Accesibilidad ---------- */
