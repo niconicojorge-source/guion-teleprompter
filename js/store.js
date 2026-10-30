@@ -107,15 +107,23 @@ function guessLang() {
 const LAYOUT_VERSION = 4;
 export const LAYOUT_KEYS = ['fontSize', 'boxWidth', 'lines', 'readPos', 'margin', 'boxOpacity'];
 
+// Computadora: mouse o trackpad y pantalla grande. La webcam está arriba, en el centro.
+export const isDesktop = () => matchMedia('(hover: hover) and (pointer: fine)').matches && Math.max(screen.width, window.innerWidth) >= 900;
+// En la compu, el equivalente a la isla: una columna angosta (~440 px) debajo de la webcam.
+const DESK_BOX = 440;
+const DESK_LAYOUT = 1;
+
 export function defaultSettings() {
   const wide = Math.min(window.innerWidth, window.innerHeight) > 700;
+  const desk = isDesktop();
   return {
     layoutVersion: LAYOUT_VERSION,
+    deskLayout: desk ? DESK_LAYOUT : 0,
     mode: 'voice',
     fontSize: wide ? 22 : 14,
     speed: 5,
     // Algo más ancho que la isla de la cámara, con 5 líneas: se ve más texto por adelantado.
-    boxWidth: wide ? 50 : 46,
+    boxWidth: desk ? Math.round(Math.min(60, Math.max(20, (DESK_BOX / window.innerWidth) * 100))) : wide ? 50 : 46,
     lines: 5,
     readPos: 22,
     margin: 8,
@@ -137,6 +145,10 @@ export function loadSettings() {
   const saved = stored && typeof stored === 'object' ? stored : {};
   if (saved.layoutVersion !== LAYOUT_VERSION) {
     for (const k of [...LAYOUT_KEYS, 'boxHeight', 'layoutVersion']) delete saved[k];
+  }
+  // Primera vez con el diseño de computadora: el texto pasa a la columna debajo de la webcam.
+  if (isDesktop() && saved.deskLayout !== DESK_LAYOUT) {
+    for (const k of [...LAYOUT_KEYS, 'deskLayout']) delete saved[k];
   }
   return { ...defaultSettings(), ...saved };
 }

@@ -1,13 +1,13 @@
 // El ?v= de cada import hace que una versión nunca se mezcle con archivos viejos en caché.
-import { loadScripts, saveScripts, loadSettings, saveSettings, loadNiches, saveNiches as saveNichesLocal, defaultSettings, LAYOUT_KEYS, uid, setAccount, sampleScript, legacyData, markLegacyMigrated, dropLegacyIfMigrated, forgetAccount } from './store.js?v=3.2';
-import { cloudEnabled, currentUser, takeSessionFromUrl, signIn, signUp, signOut, resetPassword, setPassword, signupOpen, Sync } from './cloud.js?v=3.2';
-import { norm } from './matcher.js?v=3.2';
-import { VoiceFollower, voiceSupported, voiceLog, logVoice } from './voice.js?v=3.2';
-import { openCamera, Recorder, pickMime } from './camera.js?v=3.2';
-import { AudioBridge } from './audio.js?v=3.2';
-import { createRenderer } from './editor.js?v=3.2';
+import { loadScripts, saveScripts, loadSettings, saveSettings, loadNiches, saveNiches as saveNichesLocal, defaultSettings, LAYOUT_KEYS, isDesktop, uid, setAccount, sampleScript, legacyData, markLegacyMigrated, dropLegacyIfMigrated, forgetAccount } from './store.js?v=3.3';
+import { cloudEnabled, currentUser, takeSessionFromUrl, signIn, signUp, signOut, resetPassword, setPassword, signupOpen, Sync } from './cloud.js?v=3.3';
+import { norm } from './matcher.js?v=3.3';
+import { VoiceFollower, voiceSupported, voiceLog, logVoice } from './voice.js?v=3.3';
+import { openCamera, Recorder, pickMime } from './camera.js?v=3.3';
+import { AudioBridge } from './audio.js?v=3.3';
+import { createRenderer } from './editor.js?v=3.3';
 
-const VERSION = '3.2';
+const VERSION = '3.3';
 
 // ---------- Utilidades ----------
 const $ = (s, root = document) => root.querySelector(s);
@@ -40,6 +40,8 @@ const ICONS = {
   person: svg('<circle cx="12" cy="8.5" r="3.6"/><path d="M5 19.5c1.2-3.4 4-5 7-5s5.8 1.6 7 5"/>'),
   calendar: svg('<rect x="4" y="5" width="16" height="15" rx="2.5"/><path d="M4 10h16M8.5 3v4M15.5 3v4"/>'),
   list: svg('<path d="M9 6.5h11M9 12h11M9 17.5h11"/><circle cx="4.8" cy="6.5" r="1" fill="currentColor"/><circle cx="4.8" cy="12" r="1" fill="currentColor"/><circle cx="4.8" cy="17.5" r="1" fill="currentColor"/>'),
+  expand: svg('<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>'),
+  shrink: svg('<path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>'),
 };
 
 const fold = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -692,8 +694,8 @@ function pickExcel(target) {
 // planillas (Excel nuevo y viejo, Numbers, OpenDocument, CSV) y documentos (PDF, Word, Pages,
 // OpenDocument, RTF, HTML, texto). De cada uno saca los guiones y los muestra antes de importar.
 async function importFiles(files, target = null) {
-  const xlsx = () => import('./xlsx.js?v=3.2');
-  const docs = () => import('./docs.js?v=3.2');
+  const xlsx = () => import('./xlsx.js?v=3.3');
+  const docs = () => import('./docs.js?v=3.3');
   for (const f of files) {
     if (f.size > 40 * 1024 * 1024) { toast(`"${f.name}" es demasiado grande (más de 40 MB).`, 6000); continue; }
     try {
@@ -1292,9 +1294,20 @@ function showPrompter(id) {
   cancelAnimationFrame(P.raf);
   P.raf = requestAnimationFrame(tick);
   updateButtons();
+  // Mover la ventana no avisa con ningún evento: se revisa cada tanto.
+  clearInterval(P.camTimer);
+  if (isDesktop()) P.camTimer = setInterval(placeUnderCamera, 800);
+}
+
+// Pantalla completa (compu): el texto queda pegado al borde de arriba, junto a la webcam.
+function toggleFullscreen() {
+  if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+  else document.documentElement.requestFullscreen?.().catch(() => toast('Este navegador no deja usar pantalla completa.'));
 }
 
 function closePrompter() {
+  clearInterval(P.camTimer);
+  if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
   cancelCountdown();
   stopPrompting();
   if (P.recording) { P.recording = false; clearInterval(P.recTimer); P.recorder?.stop(); }
@@ -2193,9 +2206,28 @@ function layoutFrame() {
   f.style.height = hh + 'px';
 }
 
+// En la compu la webcam está arriba, en el centro de la pantalla (no de la ventana): si la
+// ventana de Edge/Chrome está corrida, el texto se corre con ella para quedar debajo de la cámara.
+function cameraOffset() {
+  if (!isDesktop() || document.fullscreenElement) return 0;
+  // La pantalla y la ventana se miden sin zoom; la página, con el zoom del navegador (Ctrl +/-).
+  const zoom = window.outerWidth / window.innerWidth;
+  const winLeft = window.screenX - (screen.left ?? screen.availLeft ?? 0);
+  // Datos raros (ventana más grande que la pantalla o fuera de ella): texto centrado.
+  if (!(zoom > 0.25 && zoom < 5) || winLeft < -24 || winLeft + window.outerWidth > screen.width + 24) return 0;
+  const camX = (screen.width / 2 - winLeft) / zoom;
+  const room = Math.max(0, (window.innerWidth - $('#text-box').offsetWidth) / 2 - 8);
+  return Math.round(Math.max(-room, Math.min(room, camX - window.innerWidth / 2)));
+}
+
+function placeUnderCamera() {
+  $('#view-prompter').style.setProperty('--cam-x', cameraOffset() + 'px');
+}
+
 function relayout() {
   if (currentView !== 'prompter') return;
   layoutFrame();
+  placeUnderCamera();
   const box = $('#text-box');
   const script = $('#script');
   script.style.paddingTop = readPx() + 'px';
@@ -2245,6 +2277,16 @@ function bind() {
   $('#pr-play').addEventListener('click', togglePlay);
   $('#pr-rec').addEventListener('click', onRecord);
   $('#pr-settings').addEventListener('click', openSettings);
+  const fs = $('#pr-full');
+  fs.hidden = !isDesktop() || !document.fullscreenEnabled;
+  fs.innerHTML = ICONS.expand;
+  fs.addEventListener('click', toggleFullscreen);
+  document.addEventListener('fullscreenchange', () => {
+    const on = !!document.fullscreenElement;
+    fs.innerHTML = on ? ICONS.shrink : ICONS.expand;
+    fs.setAttribute('aria-label', on ? 'Salir de pantalla completa' : 'Pantalla completa');
+    requestAnimationFrame(relayout);
+  });
   $('#modes').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setMode(b.dataset.mode); });
 
   const sc = scroller();
@@ -2286,7 +2328,8 @@ function bind() {
     if (currentView !== 'prompter' || openSheets.length || e.target.matches('input, textarea, select')) return;
     if (e.key === ' ') { e.preventDefault(); togglePlay(); }
     else if (e.key === 'r' || e.key === 'R') onRecord();
-    else if (e.key === 'Escape') go(homeOf(getScript(P.id)));
+    else if ((e.key === 'f' || e.key === 'F') && isDesktop()) toggleFullscreen();
+    else if (e.key === 'Escape' && !document.fullscreenElement) go(homeOf(getScript(P.id)));
     else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
       e.preventDefault();
       if (P.mode === 'auto') {

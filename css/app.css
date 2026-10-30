@@ -167,7 +167,9 @@ svg { display: block; }
 .face-guide { position: absolute; left: 50%; top: 46%; width: 52%; aspect-ratio: 3 / 4; transform: translate(-50%, -50%); border: 2px dashed rgba(255, 255, 255, 0.55); border-radius: 50%; pointer-events: none; }
 
 /* Columna angosta pegada a la cámara: los ojos casi no se mueven al leer. */
-.top-area { position: absolute; top: calc(var(--sat) + 4px); left: var(--sal); right: var(--sar); display: flex; flex-direction: column; align-items: center; pointer-events: none; }
+.top-area { position: absolute; top: calc(var(--sat) + 4px); left: var(--sal); right: var(--sar); display: flex; flex-direction: column; align-items: center; pointer-events: none; transform: translateX(var(--cam-x, 0px)); }
+/* Compu: botón de pantalla completa arriba a la derecha, lejos del texto. */
+.full-btn { position: absolute; top: 14px; right: 14px; }
 .text-box {
   position: relative;
   width: calc(100% * var(--box-w, 0.5));
