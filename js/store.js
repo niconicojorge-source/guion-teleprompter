@@ -132,9 +132,6 @@ export function defaultSettings() {
     camera: true,
     mirrorPreview: true,
     safeZone: 'none',
-    // Compu: la toma sale vertical como en el iPhone. 'vertical' = la imagen entera, sin zoom;
-    // 'fill' = recortada al centro (con zoom); 'camera' = como filma la webcam.
-    videoShape: 'vertical',
     faceGuide: false,
     countdown: 3,
     lang: guessLang(),
