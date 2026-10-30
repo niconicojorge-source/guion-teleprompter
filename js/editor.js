@@ -1,4 +1,4 @@
-import { pickMime } from './camera.js?v=3.3';
+import { pickMime } from './camera.js?v=3.4';
 
 // Une las partes elegidas de varias tomas en un solo video, en el teléfono.
 // No hay librerías de video en la web: se reproduce cada parte y se vuelve a grabar

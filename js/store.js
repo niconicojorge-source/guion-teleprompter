@@ -132,6 +132,7 @@ export function defaultSettings() {
     camera: true,
     mirrorPreview: true,
     safeZone: 'none',
+    videoShape: 'vertical', // compu: la toma sale vertical como en el iPhone ('camera' = como filma la webcam)
     faceGuide: false,
     countdown: 3,
     lang: guessLang(),
