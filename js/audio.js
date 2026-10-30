@@ -1,4 +1,4 @@
-import { openMic } from './camera.js?v=3.4';
+import { openMic } from './camera.js?v=3.5';
 
 // Audio de la toma. En iPhone, cuando algo vuelve a abrir el micrófono (por ejemplo el
 // reconocimiento de voz de Siri), el uso anterior queda silenciado o se corta. Por eso la

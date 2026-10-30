@@ -160,6 +160,12 @@ svg { display: block; }
 .frame { position: relative; overflow: hidden; background: #000; }
 .frame video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .frame.selfie video { transform: scaleX(-1); }
+/* Vertical sin zoom (compu): la imagen entera de la webcam al medio y, arriba y abajo,
+   la misma imagen desenfocada. Igual que como queda grabado. */
+.cam-bg { display: none; }
+.frame.fit #cam { object-fit: contain; }
+.frame.fit .cam-bg { display: block; filter: blur(26px) brightness(0.55); transform: scale(1.15); }
+.frame.fit.selfie .cam-bg { transform: scale(-1.15, 1.15); }
 
 .safe { position: absolute; inset: 0; pointer-events: none; }
 .safe .zone { position: absolute; border: 1.5px dashed rgba(255, 255, 255, 0.75); border-radius: 10px; box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.35); }

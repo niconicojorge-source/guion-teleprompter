@@ -1,13 +1,13 @@
 // El ?v= de cada import hace que una versión nunca se mezcle con archivos viejos en caché.
-import { loadScripts, saveScripts, loadSettings, saveSettings, loadNiches, saveNiches as saveNichesLocal, defaultSettings, LAYOUT_KEYS, isDesktop, uid, setAccount, sampleScript, legacyData, markLegacyMigrated, dropLegacyIfMigrated, forgetAccount } from './store.js?v=3.4';
-import { cloudEnabled, currentUser, takeSessionFromUrl, signIn, signUp, signOut, resetPassword, setPassword, signupOpen, Sync } from './cloud.js?v=3.4';
-import { norm } from './matcher.js?v=3.4';
-import { VoiceFollower, voiceSupported, voiceLog, logVoice } from './voice.js?v=3.4';
-import { openCamera, Recorder, pickMime } from './camera.js?v=3.4';
-import { AudioBridge } from './audio.js?v=3.4';
-import { createRenderer } from './editor.js?v=3.4';
+import { loadScripts, saveScripts, loadSettings, saveSettings, loadNiches, saveNiches as saveNichesLocal, defaultSettings, LAYOUT_KEYS, isDesktop, uid, setAccount, sampleScript, legacyData, markLegacyMigrated, dropLegacyIfMigrated, forgetAccount } from './store.js?v=3.5';
+import { cloudEnabled, currentUser, takeSessionFromUrl, signIn, signUp, signOut, resetPassword, setPassword, signupOpen, Sync } from './cloud.js?v=3.5';
+import { norm } from './matcher.js?v=3.5';
+import { VoiceFollower, voiceSupported, voiceLog, logVoice } from './voice.js?v=3.5';
+import { openCamera, Recorder, pickMime } from './camera.js?v=3.5';
+import { AudioBridge } from './audio.js?v=3.5';
+import { createRenderer } from './editor.js?v=3.5';
 
-const VERSION = '3.4';
+const VERSION = '3.5';
 
 // ---------- Utilidades ----------
 const $ = (s, root = document) => root.querySelector(s);
@@ -694,8 +694,8 @@ function pickExcel(target) {
 // planillas (Excel nuevo y viejo, Numbers, OpenDocument, CSV) y documentos (PDF, Word, Pages,
 // OpenDocument, RTF, HTML, texto). De cada uno saca los guiones y los muestra antes de importar.
 async function importFiles(files, target = null) {
-  const xlsx = () => import('./xlsx.js?v=3.4');
-  const docs = () => import('./docs.js?v=3.4');
+  const xlsx = () => import('./xlsx.js?v=3.5');
+  const docs = () => import('./docs.js?v=3.5');
   for (const f of files) {
     if (f.size > 40 * 1024 * 1024) { toast(`"${f.name}" es demasiado grande (más de 40 MB).`, 6000); continue; }
     try {
@@ -1602,6 +1602,7 @@ async function startCamera() {
     if (!audio) toast('Sin micrófono: el video se va a grabar sin sonido.', 5000);
     const v = $('#cam');
     v.srcObject = stream;
+    $('#cam-bg').srcObject = stream;
     v.onloadedmetadata = () => { layoutFrame(); v.play().catch(() => {}); };
     $('#frame').hidden = false;
     return true;
@@ -1620,6 +1621,7 @@ function stopCamera() {
   P.stream?.getTracks().forEach((t) => t.stop());
   P.stream = null;
   $('#cam').srcObject = null;
+  $('#cam-bg').srcObject = null;
   $('#frame').hidden = true;
 }
 
@@ -2086,7 +2088,7 @@ const SETTINGS_UI = [
   { key: 'camera', label: 'Mostrar cámara', type: 'switch' },
   { key: 'mirrorPreview', label: 'Vista previa en espejo', type: 'switch' },
   { key: 'faceGuide', label: 'Guía de cara', type: 'switch' },
-  { key: 'videoShape', label: 'Formato del video', type: 'seg', desk: true, options: [['vertical', 'Vertical (celular)'], ['camera', 'Como la webcam']] },
+  { key: 'videoShape', label: 'Formato del video', type: 'seg', desk: true, options: [['vertical', 'Vertical sin zoom'], ['fill', 'Vertical con zoom'], ['camera', 'Como la webcam']] },
   { key: 'safeZone', label: 'Zonas seguras', type: 'seg', options: [['none', 'No'], ['reels', 'Reels'], ['tiktok', 'TikTok'], ['shorts', 'Shorts']] },
   { key: 'countdown', label: 'Cuenta regresiva', type: 'seg', options: [[0, 'No'], [3, '3 s'], [5, '5 s'], [10, '10 s']] },
   { section: 'Voz' },
@@ -2205,7 +2207,8 @@ function renderSafe() {
 }
 
 // Compu: la webcam filma apaisado, pero la toma sale vertical 9:16 (1080×1920, como en el
-// iPhone) recortando el centro. La vista previa muestra exactamente ese recorte.
+// iPhone). Sin zoom: la imagen entera al medio, con la misma imagen desenfocada de fondo.
+// Con 'fill', se recorta el centro (se ve más cerca). La vista previa muestra lo mismo.
 const verticalTake = () => {
   const v = $('#cam');
   return isDesktop() && settings.videoShape !== 'camera' && v.videoWidth > v.videoHeight;
@@ -2217,15 +2220,30 @@ function verticalTrack() {
   const H = 1920;
   const canvas = h('canvas', { width: W, height: H });
   const g = canvas.getContext('2d');
+  // Fondo desenfocado barato: la imagen en un canvas chiquito, estirada al tamaño final.
+  const small = h('canvas', { width: 54, height: 96 });
+  const sg = small.getContext('2d');
+  const fill = settings.videoShape === 'fill';
   let on = true;
   const next = () => (v.requestVideoFrameCallback ? v.requestVideoFrameCallback(draw) : requestAnimationFrame(draw));
   function draw() {
     if (!on) return;
     const vw = v.videoWidth;
     const vh = v.videoHeight;
-    const cw = Math.min(vw, (vh * W) / H);
-    const ch = Math.min(vh, (vw * H) / W);
-    if (vw && vh) g.drawImage(v, (vw - cw) / 2, (vh - ch) / 2, cw, ch, 0, 0, W, H);
+    if (vw && vh) {
+      const cw = Math.min(vw, (vh * W) / H);
+      const ch = Math.min(vh, (vw * H) / W);
+      if (fill) g.drawImage(v, (vw - cw) / 2, (vh - ch) / 2, cw, ch, 0, 0, W, H);
+      else {
+        sg.drawImage(v, (vw - cw) / 2, (vh - ch) / 2, cw, ch, 0, 0, small.width, small.height);
+        g.imageSmoothingQuality = 'high';
+        g.drawImage(small, -W * 0.08, -H * 0.08, W * 1.16, H * 1.16);
+        g.fillStyle = 'rgba(0, 0, 0, 0.45)';
+        g.fillRect(0, 0, W, H);
+        const fh = (vh * W) / vw;
+        g.drawImage(v, 0, (H - fh) / 2, W, fh);
+      }
+    }
     next();
   }
   draw();
@@ -2236,6 +2254,7 @@ function verticalTrack() {
 function layoutFrame() {
   const v = $('#cam');
   const a = verticalTake() ? 9 / 16 : (v.videoWidth || 9) / (v.videoHeight || 16);
+  $('#frame').classList.toggle('fit', verticalTake() && settings.videoShape !== 'fill');
   let w = window.innerWidth;
   let hh = w / a;
   if (hh > window.innerHeight) { hh = window.innerHeight; w = hh * a; }
